@@ -54,6 +54,7 @@ def client(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from routes.health import router
+    monkeypatch.setattr("routes.health.scheduler_healthy", lambda: True)
 
     app = FastAPI()
     app.include_router(router)
@@ -98,3 +99,12 @@ class TestHealthEndpoint:
         resp = test_client.get('/api/health')
         assert resp.status_code == 503
         assert resp.json()['detail'] == 'Service unavailable'
+
+
+def test_unresponsive_scheduler_is_unhealthy(client, monkeypatch):
+    test_client, deps, _ = client
+    monkeypatch.setattr('routes.health.scheduler_healthy', lambda: False)
+    response = test_client.get('/api/health')
+    assert response.status_code == 503
+    assert response.json()['detail'] == 'Daily scheduler is not responding'
+    deps.get_conn.assert_not_called()

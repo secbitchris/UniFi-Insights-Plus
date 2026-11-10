@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 
 from db import Database, get_config, is_external_db
 from enrichment import get_abuseipdb_stats
+from scheduler_guard import scheduler_healthy
 from deps import get_conn, put_conn, enricher_db, APP_VERSION
 
 logger = logging.getLogger('api.health')
@@ -19,6 +20,8 @@ router = APIRouter()
 @router.get("/api/health")
 def health():
     """Return service health, log count estimate, retention config, and storage stats."""
+    if not scheduler_healthy():
+        raise HTTPException(status_code=503, detail="Daily scheduler is not responding")
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -94,6 +97,7 @@ def health():
 
         return {
             'status': 'ok',
+            'scheduler': 'ok',
             'version': APP_VERSION,
             'total_logs': total,
             'oldest_log_at': oldest.isoformat() if oldest else None,

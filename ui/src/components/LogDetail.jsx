@@ -34,27 +34,25 @@ export default function LogDetail({ log, hiddenColumns = new Set() }) {
   }
   const enrichableIP = getEnrichableIP()
 
-  // Manual enrich button: show for block AND unknown-action firewall logs
+  // Allow explicit refresh of cached scores as well as missing details.
   const canShowEnrichButton = log
     && log.log_type === 'firewall'
     && (log.rule_action === 'block' || !log.rule_action)
-    && !log.abuse_usage_type
     && enrichableIP
 
-  // Budget prefetch: only for confirmed block (auto-enrich eligible)
+  // Fetch budget for the explicit investigation action.
   const canPrefetchBudget = log
     && log.log_type === 'firewall'
-    && log.rule_action === 'block'
-    && !log.abuse_usage_type
+    && (log.rule_action === 'block' || !log.rule_action)
     && enrichableIP
 
-  // Fetch budget status when auto-enrich eligible
+  // Fetch budget status for the selected investigation
   useEffect(() => {
     if (!canPrefetchBudget) return
     fetchAbuseIPDBStatus()
       .then(s => setBudget(s.remaining))
       .catch(() => setBudget(null))
-  }, [canPrefetchBudget])
+  }, [canPrefetchBudget, enrichableIP])
 
   // Match firewall log to policy for syslog toggle
   const canMatchPolicy = log?.log_type === 'firewall' && log?.rule_name && parseRuleName(log.rule_name)
@@ -398,6 +396,9 @@ export default function LogDetail({ log, hiddenColumns = new Set() }) {
         <span className="text-gray-400 text-[12px] uppercase tracking-wider">AbuseIPDB Score</span>
         <div className={`text-sm mt-0.5 ${level.color} font-medium`}>
           {score}% · {level.label}
+        </div>
+        <div className="text-[11px] text-gray-400 mt-0.5">
+          {enrichedData ? 'Refreshed for this investigation' : 'Cached reputation; use Enrich to refresh'}
         </div>
         {!hiddenColumns.has('categories') && decodeThreatCategories(displayLog.threat_categories) && (
           <div className="text-[11px] text-purple-400/70 mt-0.5">

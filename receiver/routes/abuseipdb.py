@@ -80,23 +80,8 @@ def enrich_ip(ip: str):
                 raise HTTPException(status_code=429, detail="No API budget remaining — resets daily")
             logger.info("Manual enrich: quota reset detected (reset_at %s passed), allowing call", reset_at)
 
-    # Clear from memory cache
-    abuseipdb.cache.delete(ip)
-
-    # Backdate ip_threats entry so lookup() treats it as expired
-    try:
-        with enricher_db.get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE ip_threats
-                    SET looked_up_at = NOW() - INTERVAL '30 days'
-                    WHERE ip = %s::inet
-                """, [ip])
-    except Exception:
-        logger.debug("Could not backdate ip_threats for %s (may not exist yet)", ip, exc_info=True)
-
-    # Call lookup — hits the API, writes back to ip_threats + memory cache
-    result = abuseipdb.lookup(ip)
+    # Bypass both caches without destroying the prior result on HTTP failure.
+    result = abuseipdb.lookup(ip, force_refresh=True)
     if not result or 'threat_score' not in result:
         raise HTTPException(status_code=502, detail="AbuseIPDB lookup failed")
 
