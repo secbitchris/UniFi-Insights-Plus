@@ -182,3 +182,34 @@ def test_retention_cleanup_rdns_failure_isolated_from_log_retention(main_module,
     # rdns sweep failure logged as WARNING
     assert any(r.levelno == logging.WARNING and 'rdns_cache retention sweep failed' in r.message
                for r in caplog.records)
+
+
+def test_failed_auth_connection_does_not_stop_blacklist_job(main_module):
+    """Reproduce Oct 19: connection acquisition fails before auth try/finally."""
+    from datetime import datetime, timedelta
+    from scheduler_guard import guard_job
+    calls = []
+
+    def failed_auth():
+        calls.append('auth')
+        raise ConnectionError('SSL EOF during get_conn')
+
+    def blacklist():
+        calls.append('blacklist')
+
+    auth = schedule.every().day.do(guard_job, failed_auth)
+    feed = schedule.every().day.do(guard_job, blacklist)
+    auth.next_run = datetime.now() - timedelta(minutes=2)
+    feed.next_run = datetime.now() - timedelta(minutes=1)
+    main_module._scheduler_tick(MagicMock())
+    assert calls == ['auth', 'blacklist']
+    assert auth.next_run > datetime.now()
+    assert feed.next_run > datetime.now()
+
+
+def test_failed_retention_reload_remains_pending(main_module):
+    main_module._retention_reload_requested.set()
+    main_module.Database.resolve_retention_time.side_effect = ConnectionError('db down')
+    with pytest.raises(ConnectionError):
+        main_module._scheduler_tick(MagicMock())
+    assert main_module._retention_reload_requested.is_set()

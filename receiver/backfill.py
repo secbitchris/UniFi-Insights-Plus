@@ -70,14 +70,14 @@ class BackfillTask:
         # One-shot migrations (ID cursor, persisted progress)
         self._service_name_migration()
         self._backfill_rule_action()
-        self._orphan_queue_seed()
+        # Historical seeding and queue draining are intentionally paused.
+        # Existing queue rows are retained for investigation.
 
-        # Queue worker: process deferred threat lookups
-        self._process_queue()
+        # Only recently active suspicious scores qualify for paced refresh.
+        from threat_refresh import refresh_one
+        refresh_one(self.db, self.abuseipdb)
 
-        # Low-priority stale re-enrichment (every 12th cycle ≈ hourly)
-        if cycle % 12 == 0:
-            self._reenrich_stale_threats()
+        # Unbounded stale-detail re-enrichment is replaced by refresh_one.
 
     # ── Queue worker ──────────────────────────────────────────────────────────
 

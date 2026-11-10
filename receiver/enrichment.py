@@ -490,7 +490,7 @@ class AbuseIPDBEnricher:
             except Exception:
                 pass
 
-    def lookup(self, ip_str: str) -> dict:
+    def lookup(self, ip_str: str, *, allow_api: bool = True, force_refresh: bool = False) -> dict:
         """Check an IP against AbuseIPDB. Returns threat_score and categories.
         
         Lookup order:
@@ -506,19 +506,26 @@ class AbuseIPDBEnricher:
             return {}
 
         # 1. Check in-memory cache
-        cached = self.cache.get(ip_str)
+        cached = None if force_refresh else self.cache.get(ip_str)
         if cached is not None:
             return cached
 
         # 2. Check persistent DB cache
-        if self.db:
+        if self.db and not force_refresh:
             try:
-                db_result = self.db.get_threat_cache(ip_str, max_age_days=self.STALE_DAYS)
+                # Retain older intelligence for passive display; refreshing is
+                # reserved for explicit investigations or the paced worker.
+                max_age = self.STALE_DAYS if allow_api else 30
+                db_result = self.db.get_threat_cache(ip_str, max_age_days=max_age)
                 if db_result:
                     self.cache.set(ip_str, db_result)  # Promote to memory cache
                     return db_result
             except Exception as e:
                 logger.debug("DB threat cache lookup failed for %s: %s", ip_str, e)
+
+        # Passive flow enrichment must never consume the investigation budget.
+        if not allow_api:
+            return {}
 
         # 3. Check rate limit before API call
         if not self._check_rate_limit():
@@ -943,24 +950,16 @@ class Enricher:
 
         # AbuseIPDB (blocked firewall events, or pihole with threat enabled)
         if (is_pihole and self._pihole_enrichment in ('threat', 'both')):
-            threat_data = self.abuseipdb.lookup(ip_to_enrich)
+            threat_data = self.abuseipdb.lookup(ip_to_enrich, allow_api=False)
             if threat_data:
                 parsed.update(threat_data)
                 self._touch_threat_coalesced(ip_to_enrich)
         elif (parsed.get('log_type') == 'firewall'
                 and parsed.get('rule_action') == 'block'):
-            threat_data = self.abuseipdb.lookup(ip_to_enrich)
+            threat_data = self.abuseipdb.lookup(ip_to_enrich, allow_api=False)
             if threat_data:
                 parsed.update(threat_data)
                 self._touch_threat_coalesced(ip_to_enrich)
-            elif self.abuseipdb.enabled and self._db:
-                # Enqueue for deferred lookup — coalesced, only when AbuseIPDB is configured
-                if not self._is_recently_touched(ip_to_enrich):
-                    try:
-                        self._db.enqueue_threat_backfill(ip_to_enrich, source='live_miss')
-                    except Exception:
-                        logger.debug("enqueue_threat_backfill failed for %s", ip_to_enrich, exc_info=True)
-                    self._recently_touched[ip_to_enrich] = time.monotonic()
 
         return parsed
 

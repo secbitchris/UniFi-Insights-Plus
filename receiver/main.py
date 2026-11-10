@@ -28,6 +28,7 @@ from blacklist import BlacklistFetcher
 from unifi_api import UniFiAPI
 from pihole_api import PiHolePoller
 from routes.auth import auth_cleanup
+from scheduler_guard import guard_job, tick_with_heartbeat
 
 # Set by the SIGUSR2 handler when retention_time may have changed.
 # Consumed by the scheduler loop (single-writer, single-reader — safe).
@@ -296,7 +297,7 @@ def _register_retention_job(db: Database):
     (schedule.every()
              .day
              .at(cfg.time)   # 'HH:MM' — schedule library's native format
-             .do(_retention_cleanup, db=db)
+             .do(guard_job, _retention_cleanup, db=db)
              .tag('retention'))
     logger.info("Retention cleanup scheduled daily at %s (source=%s, container-local time)",
                 cfg.time, cfg.source)
@@ -309,8 +310,8 @@ def _scheduler_tick(db: Database):
     runs. All `schedule` registry mutation therefore stays on this thread.
     """
     if _retention_reload_requested.is_set():
-        _retention_reload_requested.clear()
         _register_retention_job(db)
+        _retention_reload_requested.clear()
     schedule.run_pending()
 
 
@@ -336,12 +337,12 @@ def run_scheduler(db: Database, enricher: Enricher, blacklist_fetcher: Blacklist
     def refresh_wan_ip():
         _refresh_network_identity_from_logs(db)
 
-    schedule.every(STATS_INTERVAL_MINUTES).minutes.do(log_stats)
-    schedule.every(STATS_INTERVAL_MINUTES).minutes.do(refresh_wan_ip)
-    _register_retention_job(db)
-    schedule.every().day.at("04:00").do(pull_blacklist)
-    # auth_cleanup has its own internal try/except — no wrapper needed here.
-    schedule.every().day.at("03:30").do(auth_cleanup)
+    schedule.every(STATS_INTERVAL_MINUTES).minutes.do(guard_job, log_stats)
+    schedule.every(STATS_INTERVAL_MINUTES).minutes.do(guard_job, refresh_wan_ip)
+    _retention_reload_requested.set()  # Retry initial DB resolution on the guarded loop.
+    schedule.every().day.at("04:00").do(guard_job, pull_blacklist)
+    # Connection acquisition in auth_cleanup can fail before its inner try.
+    schedule.every().day.at("03:30").do(guard_job, auth_cleanup)
 
     logger.info("Scheduler started — stats every %dm, blacklist daily at 04:00, auth cleanup daily at 03:30",
                  STATS_INTERVAL_MINUTES)
@@ -351,7 +352,7 @@ def run_scheduler(db: Database, enricher: Enricher, blacklist_fetcher: Blacklist
     pull_blacklist()
 
     while True:
-        _scheduler_tick(db)
+        tick_with_heartbeat(_scheduler_tick, db)
         time.sleep(10)
 
 
