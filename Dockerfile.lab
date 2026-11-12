@@ -10,7 +10,7 @@ FROM ghcr.io/jmasarweh/unifi-log-insight@sha256:5c5aa0a01f02a581cdcd08b3269cd141
 ARG SOURCE_REVISION
 LABEL org.opencontainers.image.source="https://github.com/secbitchris/UniFi-Insights-Plus" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      org.opencontainers.image.version="3.7.0-lab.1"
+      org.opencontainers.image.version="3.7.0-lab.2"
 COPY VERSION /app/VERSION
 COPY receiver/main.py receiver/enrichment.py receiver/backfill.py receiver/scheduler_guard.py receiver/threat_refresh.py /app/
 COPY receiver/routes/abuseipdb.py receiver/routes/health.py /app/routes/
