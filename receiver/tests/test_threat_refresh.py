@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from threat_refresh import daily_limit, refresh_one, reserve_slot, reserve_state
+from threat_refresh import daily_limit, refresh_one, reserve_candidate, reserve_state
 from enrichment import AbuseIPDBEnricher
 
 
@@ -36,9 +36,10 @@ def test_reservation_persisted_under_lock_before_return():
     db = MagicMock()
     cur = db.get_conn.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
     cur.fetchone.side_effect = [(1000,), ({'day': 0, 'used': 3, 'next_at': 1000},)]
-    assert reserve_slot(db, 200)
+    cur.fetchall.return_value = [('8.8.8.8', 15, 1, None, None)]
+    assert reserve_candidate(db, 200) == ('8.8.8.8', 'discovery')
     statements = [call.args[0] for call in cur.execute.call_args_list]
-    assert 'pg_advisory_xact_lock' in statements[1]
+    assert any('pg_advisory_xact_lock' in s for s in statements)
     assert 'INSERT INTO system_config' in statements[-1]
     assert '"used": 4' in cur.execute.call_args.args[1][1]
     db.get_conn.return_value.__exit__.assert_called_once()
@@ -49,7 +50,7 @@ def test_persistence_failure_never_calls_api(monkeypatch):
     db, abuse = MagicMock(), MagicMock()
     cur = db.get_conn.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
     cur.fetchone.return_value = ('8.8.8.8',)
-    with patch('threat_refresh.reserve_slot', side_effect=RuntimeError('db unavailable')):
+    with patch('threat_refresh.reserve_candidate', side_effect=RuntimeError('db unavailable')):
         refresh_one(db, abuse)
     abuse.lookup.assert_not_called()
 
@@ -60,11 +61,8 @@ def test_selective_refresh_forces_http_without_backdating(monkeypatch):
     cur = db.get_conn.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
     cur.fetchone.return_value = ('8.8.8.8',)
     abuse.lookup.return_value = {}  # Failure must retain prior score unchanged.
-    with patch('threat_refresh.reserve_slot', return_value=True):
+    with patch('threat_refresh.reserve_candidate', return_value=('8.8.8.8', 'discovery')):
         refresh_one(db, abuse)
-    sql = cur.execute.call_args.args[0]
-    assert 'threat_score >= 25' in sql and "INTERVAL '24 hours'" in sql
-    assert 'UPDATE' not in sql
     abuse.lookup.assert_called_once_with('8.8.8.8', force_refresh=True)
     db.patch_from_cache_for_ips.assert_not_called()
 
