@@ -17,6 +17,7 @@ import network_radio
 import network_dns
 import network_reachability
 import network_evidence
+from network_links import LinkMonitor
 
 log = logging.getLogger(__name__)
 INTERVAL = 300
@@ -149,8 +150,10 @@ class NetworkHealth:
         self.db = db
         self.stop_event = threading.Event()
         self.thread = None
+        self.links = LinkMonitor(db, ROOT)
 
     def start(self):
+        self.links.start()
         def run():
             while not self.stop_event.is_set():
                 try:
@@ -163,6 +166,7 @@ class NetworkHealth:
         self.thread.start()
 
     def stop(self):
+        self.links.stop()
         self.stop_event.set()
         if self.thread:
             self.thread.join(timeout=3)

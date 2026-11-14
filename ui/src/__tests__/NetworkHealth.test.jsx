@@ -3,7 +3,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { describe, it, expect, vi } from 'vitest'
 import NetworkHealth from '../components/NetworkHealth'
 import { fetchNetworkHealth, fetchReachability, fetchNetworkHistory, fetchNetworkEvents, setNetworkDevicePolicy } from '../api'
-vi.mock('../api', () => ({ fetchNetworkHealth: vi.fn(), fetchReachability: vi.fn(), fetchNetworkHistory: vi.fn(), fetchNetworkEvents: vi.fn(), setNetworkDevicePolicy: vi.fn() }))
+vi.mock('../api', () => ({ fetchNetworkHealth: vi.fn(), fetchReachability: vi.fn(), fetchNetworkHistory: vi.fn(), fetchNetworkEvents: vi.fn(), fetchNetworkLinks: vi.fn(), setNetworkDevicePolicy: vi.fn() }))
 describe('network health evidence', () => {
   it('labels stale results and client evidence explicitly', async () => {
     fetchNetworkHealth.mockResolvedValue({ generated: 1000, stale: true, checks: [{ title: 'DNS resolver', severity: 'ok', detail: 'Previous result' }], watch: { aa: { label: 'Camera', status: 'present' } } })
@@ -42,7 +42,7 @@ it('saves device expectations through the local monitor endpoint', async () => {
   const select=await screen.findByRole('combobox',{name:'Expectation for Old switch'})
   fireEvent.change(select,{target:{value:'retired'}})
   await waitFor(() => expect(setNetworkDevicePolicy).toHaveBeenCalledWith('aa:bb:cc:dd:ee:ff','retired',''))
-  expect(await screen.findByRole('status')).toBeTruthy()
+  expect(await screen.findByText(/Old switch: Applied at the next scheduled collection/)).toBeTruthy()
 })
 
 
