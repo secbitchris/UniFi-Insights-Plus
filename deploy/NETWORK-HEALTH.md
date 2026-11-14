@@ -112,3 +112,21 @@ only observed speed recovery or an expectation change closes them. All
 collection failures become stale/unknown within three minutes, preserving
 prior evidence. No automatic reboot, PoE cycle, port change, or extra
 AbuseIPDB lookup is performed.
+
+## Native controller events (BL-1333)
+
+The minute observer also queries the read-only v2 system-log/all API (POST is
+the query method). It requests device, Ethernet-port, power and software-update
+categories, excluding security and client activity. Startup queries seven days;
+later queries overlap the previous successful time by ten minutes. Each poll
+is capped at two 100-row pages and 1 MiB per response. Limit hits are explicitly
+partial; failures preserve retained records and report unavailable status.
+
+Normalized native records retain controller millisecond timestamps, IDs,
+message templates and selected parameter fields. They are deduplicated and
+limited to seven days/1000 records. Incidents retain up to 100 matching records
+for the AP or parent switch, from ten minutes before detection to two minutes
+after recovery. Native and sampled records remain separate in the UI and JSON.
+A matching event is context, not proof of the physical cause. The controller may
+not emit an event for every Ethernet renegotiation. No logging settings, device
+configuration or credentials are changed.

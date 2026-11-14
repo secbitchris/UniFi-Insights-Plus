@@ -104,7 +104,8 @@ def test_history_and_incident_sample_bounds_keep_trigger():
     assert len(state['devices'][AP]['recent']) == 10
 
 
-def test_controller_failure_preserves_incident_and_marks_report_stale(tmp_path):
+def test_controller_failure_preserves_incident_and_marks_report_stale(tmp_path, monkeypatch):
+    monkeypatch.setattr("network_links.capture", lambda *args: None)
     client = Mock(enabled=True)
     client._get.return_value = {'data': devices(1000)}
     poll(client, tmp_path, 1000)
