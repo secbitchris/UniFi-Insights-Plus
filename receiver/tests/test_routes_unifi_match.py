@@ -3,8 +3,10 @@
 Covers:
 - POST /api/firewall/policies/match-log disabled states
 - Cache invalidation on PATCH, setup complete, and VPN save
+- Policy id validation on PATCH and bulk routes (#112)
 """
 
+import json
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -40,6 +42,10 @@ def _make_base_db_mock():
     mock_db.encrypt_api_key = MagicMock()
     mock_db.decrypt_api_key = MagicMock()
     return mock_db
+
+
+POLICY_ID = '11111111-2222-4333-8444-555555555555'
+POLICY_ID_2 = '66666666-7777-4888-9999-aaaaaaaaaaaa'
 
 
 def _enable_unifi_with_features(mock_deps, firewall_management=True):
@@ -95,7 +101,7 @@ def setup_client(monkeypatch):
     monkeypatch.setitem(sys.modules, 'deps', mock_deps)
 
     mock_db_module = _make_base_db_mock()
-    mock_db_module.count_logs = MagicMock(return_value=100)
+    mock_db_module.has_logs = MagicMock(return_value=True)
     mock_db_module.is_external_db = MagicMock(return_value=False)
     monkeypatch.setitem(sys.modules, 'db', mock_db_module)
 
@@ -159,11 +165,143 @@ class TestPermissionError:
         mock_deps.unifi_api.patch_firewall_policy.side_effect = \
             _UniFiPermissionError('Insufficient permissions', status_code=403)
 
-        resp = client.patch('/api/firewall/policies/p1', json={
+        resp = client.patch(f'/api/firewall/policies/{POLICY_ID}', json={
             'loggingEnabled': True, 'origin': 'USER_DEFINED',
         })
         assert resp.status_code == 403
         assert 'Insufficient permissions' in resp.json()['detail']
+
+
+# ── Policy id validation (#112) ──────────────────────────────────────────────
+
+class TestPolicyIdValidation:
+    @pytest.mark.parametrize('bad_id', ['undefined', 'null', 'p1', POLICY_ID + 'x'])
+    def test_patch_rejects_invalid_id(self, unifi_client, bad_id):
+        client, mock_deps = unifi_client
+        _enable_unifi_with_features(mock_deps)
+
+        resp = client.patch(f'/api/firewall/policies/{bad_id}', json={
+            'loggingEnabled': True, 'origin': 'USER_DEFINED',
+        })
+        assert resp.status_code == 400
+        assert resp.json()['detail'] == 'Invalid firewall policy id'
+        mock_deps.unifi_api.patch_firewall_policy.assert_not_called()
+
+    def test_patch_rejects_uuid_with_trailing_newline(self, unifi_client):
+        # re.match with a '$' anchor accepts "<uuid>\n"; fullmatch must not.
+        client, mock_deps = unifi_client
+        _enable_unifi_with_features(mock_deps)
+
+        resp = client.patch(f'/api/firewall/policies/{POLICY_ID}%0A', json={
+            'loggingEnabled': True, 'origin': 'USER_DEFINED',
+        })
+        assert resp.status_code == 400
+        mock_deps.unifi_api.patch_firewall_policy.assert_not_called()
+
+    def test_bulk_rejects_uuid_with_trailing_newline(self, unifi_client):
+        client, mock_deps = unifi_client
+        _enable_unifi_with_features(mock_deps)
+        mock_deps.unifi_api.bulk_patch_logging.return_value = {
+            'total': 1, 'success': 1, 'failed': 0, 'skipped': 0, 'retried': 0, 'errors': [],
+        }
+
+        resp = client.post('/api/firewall/policies/bulk-logging', json={'policies': [
+            {'id': POLICY_ID, 'loggingEnabled': True},
+            {'id': POLICY_ID_2 + '\n', 'loggingEnabled': True},
+        ]})
+        assert resp.status_code == 200
+        mock_deps.unifi_api.bulk_patch_logging.assert_called_once_with(
+            [{'id': POLICY_ID, 'loggingEnabled': True}])
+        assert resp.json()['failed'] == 1
+        assert resp.json()['errors'] == [{'id': POLICY_ID_2 + '\n', 'error': 'Invalid firewall policy id'}]
+
+    def test_bulk_rejected_ids_do_not_drop_controller_errors(self, unifi_client):
+        # 20 controller failures plus the verification entry must all survive
+        # alongside one rejected id; rejected entries are appended last.
+        client, mock_deps = unifi_client
+        _enable_unifi_with_features(mock_deps)
+        controller_errors = [{'id': f'c{i}', 'error': 'HTTP 500'} for i in range(20)]
+        verification = {'verification': '1 policies did not reflect the requested state', 'ids': ['x']}
+        mock_deps.unifi_api.bulk_patch_logging.return_value = {
+            'total': 21, 'success': 0, 'failed': 21, 'skipped': 0, 'retried': 0,
+            'errors': controller_errors + [verification],
+        }
+
+        resp = client.post('/api/firewall/policies/bulk-logging', json={'policies': [
+            {'id': POLICY_ID, 'loggingEnabled': True},
+            {'id': 'undefined', 'loggingEnabled': True},
+        ]})
+        assert resp.status_code == 200
+        errors = resp.json()['errors']
+        assert len(errors) == 22
+        assert errors[:21] == controller_errors + [verification]
+        assert errors[21] == {'id': 'undefined', 'error': 'Invalid firewall policy id'}
+        assert resp.json()['failed'] == 22
+        assert resp.json()['total'] == 22
+
+    def test_patch_accepts_uuid(self, unifi_client):
+        client, mock_deps = unifi_client
+        _enable_unifi_with_features(mock_deps)
+        mock_deps.unifi_api.patch_firewall_policy.return_value = {'id': POLICY_ID}
+
+        resp = client.patch(f'/api/firewall/policies/{POLICY_ID.upper()}', json={
+            'loggingEnabled': False, 'origin': 'USER_DEFINED',
+        })
+        assert resp.status_code == 200
+        mock_deps.unifi_api.patch_firewall_policy.assert_called_once_with(POLICY_ID.upper(), False)
+
+    def test_bulk_drops_invalid_ids_and_reports_them_failed(self, unifi_client):
+        client, mock_deps = unifi_client
+        _enable_unifi_with_features(mock_deps)
+        mock_deps.unifi_api.bulk_patch_logging.return_value = {
+            'total': 1, 'success': 1, 'failed': 0, 'skipped': 0, 'retried': 0, 'errors': [],
+        }
+
+        resp = client.post('/api/firewall/policies/bulk-logging', json={'policies': [
+            {'id': POLICY_ID, 'loggingEnabled': True},
+            {'id': 'undefined', 'loggingEnabled': True},
+            {'loggingEnabled': True},
+        ]})
+        assert resp.status_code == 200
+        mock_deps.unifi_api.bulk_patch_logging.assert_called_once_with(
+            [{'id': POLICY_ID, 'loggingEnabled': True}])
+        body = resp.json()
+        assert body['total'] == 3
+        assert body['success'] == 1
+        assert body['failed'] == 2
+        assert [e['id'] for e in body['errors']] == ['undefined', None]
+
+    def test_bulk_all_invalid_is_400(self, unifi_client):
+        client, mock_deps = unifi_client
+        _enable_unifi_with_features(mock_deps)
+
+        resp = client.post('/api/firewall/policies/bulk-logging', json={'policies': [
+            {'id': 'undefined', 'loggingEnabled': True},
+        ]})
+        assert resp.status_code == 400
+        mock_deps.unifi_api.bulk_patch_logging.assert_not_called()
+
+    def test_bulk_stream_reports_invalid_ids_failed(self, unifi_client):
+        client, mock_deps = unifi_client
+        _enable_unifi_with_features(mock_deps)
+        mock_deps.unifi_api.bulk_patch_logging.return_value = {
+            'total': 1, 'success': 1, 'failed': 0, 'skipped': 0, 'retried': 0, 'errors': [],
+        }
+
+        resp = client.post('/api/firewall/policies/bulk-logging-stream', json={'policies': [
+            {'id': POLICY_ID_2, 'loggingEnabled': False},
+            {'id': 'undefined', 'loggingEnabled': False},
+        ]})
+        assert resp.status_code == 200
+        events = [json.loads(line[len('data: '):])
+                  for line in resp.text.splitlines() if line.startswith('data: ')]
+        complete = [e for e in events if e['event'] == 'complete']
+        assert len(complete) == 1
+        assert complete[0]['total'] == 2
+        assert complete[0]['failed'] == 1
+        assert complete[0]['errors'][0]['id'] == 'undefined'
+        args, _ = mock_deps.unifi_api.bulk_patch_logging.call_args
+        assert args[0] == [{'id': POLICY_ID_2, 'loggingEnabled': False}]
 
 
 # ── Cache invalidation hooks ─────────────────────────────────────────────────
@@ -172,10 +310,10 @@ class TestCacheInvalidation:
     def test_patch_policy_invalidates_cache(self, unifi_client):
         client, mock_deps = unifi_client
         _enable_unifi_with_features(mock_deps)
-        mock_deps.unifi_api.patch_firewall_policy.return_value = {'id': 'p1'}
+        mock_deps.unifi_api.patch_firewall_policy.return_value = {'id': POLICY_ID}
 
         with patch('routes.unifi.invalidate_fw_cache') as mock_inv:
-            resp = client.patch('/api/firewall/policies/p1', json={
+            resp = client.patch(f'/api/firewall/policies/{POLICY_ID}', json={
                 'loggingEnabled': True, 'origin': 'USER_DEFINED',
             })
             assert resp.status_code == 200
@@ -281,7 +419,31 @@ class TestImportCacheInvalidation:
             mock_inv.assert_not_called()
 
 
+# ── Setup status ───────────────────────────────────────────────────────────
+
+class TestSetupStatus:
+    def test_reports_log_presence_not_count(self, setup_client):
+        """Public endpoint: an EXISTS probe, never a full COUNT(*) (#103)."""
+        client, _mock_deps, mock_db = setup_client
+        mock_db.get_config.return_value = True
+
+        resp = client.get('/api/setup/status')
+
+        assert resp.status_code == 200
+        assert resp.json() == {'setup_complete': True, 'has_logs': True}
+        mock_db.has_logs.assert_called_once()
+        assert mock_db.has_logs.call_args.args[1] == 'firewall'
+
+
 # ── Setup identity seeding ─────────────────────────────────────────────────
+
+def _setup_config(mock_db, mock_deps, *, unifi_enabled):
+    """Effective UniFi state on the API's unifi_api; the raw DB flag says the
+    opposite to prove it is not consulted."""
+    mock_deps.unifi_api.enabled = unifi_enabled
+    config = {'wan_interfaces': ['ppp0'], 'unifi_enabled': not unifi_enabled}
+    mock_db.get_config.side_effect = lambda _db, key, default=None: config.get(key, default)
+
 
 class TestSetupIdentitySeeding:
     def test_unifi_path_seeds_identity(self, setup_client):
@@ -305,13 +467,21 @@ class TestSetupIdentitySeeding:
             })
 
         assert resp.status_code == 200
+        assert resp.json()['identity_source'] == 'unifi'
         mock_deps.enricher_db.persist_network_identity.assert_called_once()
 
-    def test_log_detection_branch_still_works(self, setup_client):
-        """Log-detection branch persists via inline set_config, not shared helper."""
+    def test_log_detection_branch_merges_identity(self, setup_client):
+        """Log-detection branch runs the merging detectors before the reload signal.
+
+        A wholesale wan_ip_by_iface write from the (windowed) observation
+        would drop a quiet WAN2 that detect_wan_ip()'s merge preserves.
+        """
         client, mock_deps, mock_db = setup_client
-        mock_db.get_config.return_value = ['ppp0']
-        mock_deps.enricher_db.get_wan_ips_by_interface.return_value = {'ppp0': '9.9.9.9'}
+        _setup_config(mock_db, mock_deps, unifi_enabled=False)
+        order = []
+        mock_deps.enricher_db.detect_wan_ip.side_effect = lambda: order.append('wan')
+        mock_deps.enricher_db.detect_gateway_ips.side_effect = lambda: order.append('gateway')
+        mock_deps.signal_receiver.side_effect = lambda: order.append('signal')
 
         with patch('routes.setup.invalidate_fw_cache'):
             resp = client.post('/api/setup/complete', json={
@@ -320,9 +490,50 @@ class TestSetupIdentitySeeding:
             })
 
         assert resp.status_code == 200
-        mock_deps.enricher_db.get_wan_ips_by_interface.assert_called_once()
-        # Shared helper NOT called — log path uses inline persistence
+        assert resp.json()['identity_source'] == 'logs'
+        assert order == ['wan', 'gateway', 'signal']
+        mock_deps.enricher_db.get_wan_ips_by_interface.assert_not_called()
         mock_deps.enricher_db.persist_network_identity.assert_not_called()
+        identity_keys = {'wan_ip_by_iface', 'wan_ips', 'wan_ip', 'gateway_ips'}
+        # set_config(db, key, value) and db.set_config(key, value) alike
+        for setter in (mock_db.set_config, mock_deps.enricher_db.set_config):
+            assert not [c for c in setter.call_args_list
+                        if any(isinstance(a, str) and a in identity_keys for a in c.args)]
+
+    def test_log_detection_failure_does_not_hard_fail(self, setup_client):
+        """Detection is best-effort: one detector failing never blocks setup."""
+        client, mock_deps, mock_db = setup_client
+        _setup_config(mock_db, mock_deps, unifi_enabled=False)
+        mock_deps.enricher_db.detect_wan_ip.side_effect = Exception('db down')
+
+        with patch('routes.setup.invalidate_fw_cache'):
+            resp = client.post('/api/setup/complete', json={
+                'wan_interfaces': ['ppp0'],
+                'wizard_path': 'log_detection',
+            })
+
+        assert resp.status_code == 200
+        mock_deps.enricher_db.detect_gateway_ips.assert_called_once()
+        mock_deps.signal_receiver.assert_called_once()
+
+    def test_log_detection_keeps_unifi_identity_authoritative(self, setup_client):
+        """With UniFi enabled, log detection must not merge into UniFi-owned maps."""
+        client, mock_deps, mock_db = setup_client
+        _setup_config(mock_db, mock_deps, unifi_enabled=True)
+
+        with patch('routes.setup.invalidate_fw_cache'):
+            resp = client.post('/api/setup/complete', json={
+                'wan_interfaces': ['ppp0'],
+                'wizard_path': 'log_detection',
+            })
+
+        assert resp.status_code == 200
+        assert resp.json()['identity_source'] == 'unifi'
+        mock_deps.enricher_db.detect_wan_ip.assert_not_called()
+        mock_deps.enricher_db.detect_gateway_ips.assert_not_called()
+        # unifi_enabled itself is left alone
+        assert not [c for c in mock_db.set_config.call_args_list if c.args[1] == 'unifi_enabled']
+        mock_deps.signal_receiver.assert_called_once()
 
     def test_partial_wan_does_not_hard_fail(self, setup_client):
         """UniFi setup succeeds even when get_network_config raises."""

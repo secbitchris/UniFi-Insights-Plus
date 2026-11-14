@@ -1,7 +1,7 @@
 """Tests for parsers.py — syslog parsing, direction/action derivation, VPN matching."""
 
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -105,6 +105,35 @@ class TestParseSyslogTimestamp:
         monkeypatch.setenv('TZ', 'Invalid/Zone')
         ts = parse_syslog_timestamp('Feb', '8', '12:00:00')
         assert ts.tzinfo == timezone.utc
+
+    def test_out_of_range_day_returns_none(self, monkeypatch):
+        # Attacker-crafted packet: "Feb 99 12:00:00 host body" passes the
+        # SYSLOG_HEADER regex but datetime() raises ValueError on day=99.
+        monkeypatch.setenv('TZ', 'UTC')
+        assert parse_syslog_timestamp('Feb', '99', '12:00:00') is None
+
+    def test_out_of_range_hour_returns_none(self, monkeypatch):
+        monkeypatch.setenv('TZ', 'UTC')
+        assert parse_syslog_timestamp('Feb', '1', '99:00:00') is None
+
+    def test_out_of_range_minute_returns_none(self, monkeypatch):
+        monkeypatch.setenv('TZ', 'UTC')
+        assert parse_syslog_timestamp('Feb', '1', '12:99:00') is None
+
+    def test_out_of_range_second_returns_none(self, monkeypatch):
+        monkeypatch.setenv('TZ', 'UTC')
+        assert parse_syslog_timestamp('Feb', '1', '12:00:99') is None
+
+    def test_huge_int_returns_none(self, monkeypatch):
+        # OverflowError path: int() succeeds but datetime() can't represent
+        monkeypatch.setenv('TZ', 'UTC')
+        assert parse_syslog_timestamp('Feb', '1', '99999999999:00:00') is None
+
+    def test_parse_log_returns_none_for_overflow_day(self, monkeypatch):
+        # End to end through the header regex (day is \d+): a 20-digit day
+        # overflows datetime() and must yield None, not an exception.
+        monkeypatch.setenv('TZ', 'UTC')
+        assert parse_log('Feb 99999999999999999999 10:00:00 host kernel: x') is None
 
 
 # ── detect_log_type ──────────────────────────────────────────────────────────
@@ -547,3 +576,126 @@ class TestParseLog:
         line = 'Feb  8 16:43:49 UDR systemd[1]: Starting Daily Cleanup...'
         r = parse_log(line)
         assert r['log_type'] == 'system'
+
+
+# ── Invalid-field warnings are rate-limited and repr-escaped ─────────────────
+
+class TestInvalidFieldWarnings:
+    PREFIX = 'Feb  8 16:43:49 UDR-UK kernel: [WAN_IN-B-4000000003-D]IN=ppp0 OUT=br20 '
+
+    @pytest.fixture(autouse=True, params=['tzdata', 'no-tzdata'])
+    def _tz(self, request, monkeypatch):
+        """Run every case with and without tzdata. Without it, ZoneInfo('UTC')
+        raises and parsers logs its own "Invalid TZ" warning on every call,
+        which must not be mistaken for the invalid-field warning."""
+        monkeypatch.setenv('TZ', 'UTC')
+        if request.param == 'no-tzdata':
+            from zoneinfo import ZoneInfoNotFoundError
+
+            def _no_tzdata(name):
+                raise ZoneInfoNotFoundError(name)
+            monkeypatch.setattr(parsers, 'ZoneInfo', _no_tzdata)
+
+    @staticmethod
+    def _warnings(caplog, text):
+        return [r for r in caplog.records
+                if r.name == 'parsers' and r.levelname == 'WARNING' and text in r.getMessage()]
+
+    def test_invalid_src_flood_logs_one_escaped_line(self, monkeypatch, caplog):
+        import logging
+        from types import SimpleNamespace
+        import log_utils
+        clock = [500.0]
+        monkeypatch.setattr(log_utils, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+        # A trailing "\n" still matches the header regex and stays in raw_log.
+        line = self.PREFIX + 'SRC=999.1.1.1 DST=10.0.20.100 PROTO=TCP SPT=54321 DPT=443\n'
+
+        with caplog.at_level(logging.WARNING, logger='parsers'):
+            for i in range(500):
+                clock[0] = 500.0 + i * 0.1  # 500 packets over 50 s
+                r = parse_log(line)
+                assert r['src_ip'] is None
+
+        warnings = self._warnings(caplog, 'Invalid src_ip')
+        assert len(warnings) == 1
+        msg = warnings[0].getMessage()
+        assert '\n' not in msg   # cannot forge an extra log line
+        assert r'\n' in msg      # the newline is shown escaped (repr)
+
+    def test_invalid_mac_is_rate_limited_and_escaped(self, monkeypatch, caplog):
+        import logging
+        monkeypatch.setattr(parsers, 'MAC_RE', parsers.re.compile(r'(?!)'))  # reject every MAC
+        line = (self.PREFIX + 'MAC=aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:08:00 '
+                'SRC=203.0.113.5 DST=10.0.20.100 PROTO=TCP SPT=54321 DPT=443\n')
+
+        with caplog.at_level(logging.WARNING, logger='parsers'):
+            for _ in range(3):
+                r = parse_log(line)
+                assert r['mac_address'] is None
+
+        warnings = self._warnings(caplog, 'Invalid mac_address')
+        assert len(warnings) == 1
+        assert '\n' not in warnings[0].getMessage()
+
+
+# ── WAN_IP_BY_IFACE (issue #103) ─────────────────────────────────────────────
+
+class TestWanIpByIfaceState:
+    """reload_config_from_db() keeps the loaded wan_ip_by_iface map, which
+    gates WAN_LOCAL auto-learn and the receiver's identity-refresh trigger."""
+
+    @staticmethod
+    def _db(config):
+        db = MagicMock()
+        db.get_config.side_effect = lambda key, default=None: config.get(key, default)
+        return db
+
+    def test_reload_stores_map(self):
+        parsers.reload_config_from_db(self._db({
+            'wan_interfaces': ['eth8'], 'wan_ip_by_iface': {'eth8': '1.1.1.1'}}))
+        assert parsers.WAN_IP_BY_IFACE == {'eth8': '1.1.1.1'}
+
+    def test_reload_without_map_stores_empty_dict(self):
+        parsers.reload_config_from_db(self._db({'wan_interfaces': ['eth8']}))
+        assert parsers.WAN_IP_BY_IFACE == {}
+
+    def test_reload_adds_saved_wan_ip(self):
+        parsers.reload_config_from_db(self._db({'wan_interfaces': ['ppp0'], 'wan_ip': '5.6.7.8'}))
+        assert parsers.WAN_IPS == {'5.6.7.8'}
+        assert parsers.get_wan_ip() == '5.6.7.8'
+
+    def test_reload_publishes_after_all_reads(self, monkeypatch):
+        """The scheduler thread may reload while derive_direction() reads on the
+        main thread: no global may change before every DB read is done, and the
+        previously published WAN_IPS set is never mutated in place."""
+        old_wan_ips = {'9.9.9.9'}
+        monkeypatch.setattr(parsers, 'WAN_IPS', old_wan_ips)
+        before = (parsers.WAN_INTERFACES, parsers.INTERFACE_LABELS, parsers.WAN_IPS,
+                  parsers.WAN_IP_BY_IFACE, parsers.get_wan_ip())
+        config = {'wan_interfaces': ['eth8'], 'interface_labels': {'br0': 'LAN'},
+                  'wan_ip_by_iface': {'eth8': '1.1.1.1'}, 'wan_ip': '1.1.1.1'}
+        seen = []
+
+        def get_config(key, default=None):
+            seen.append((parsers.WAN_INTERFACES, parsers.INTERFACE_LABELS, parsers.WAN_IPS,
+                         parsers.WAN_IP_BY_IFACE, parsers.get_wan_ip()))
+            return config.get(key, default)
+
+        db = MagicMock()
+        db.get_config.side_effect = get_config
+        parsers.reload_config_from_db(db)
+
+        assert seen and all(state == before for state in seen)
+        assert old_wan_ips == {'9.9.9.9'}
+        assert parsers.WAN_INTERFACES == {'eth8'}
+        assert parsers.WAN_IPS == {'1.1.1.1'}
+        assert parsers.WAN_IP_BY_IFACE == {'eth8': '1.1.1.1'}
+
+    def test_auto_learn_only_without_map(self, monkeypatch):
+        monkeypatch.setattr(parsers, 'WAN_INTERFACES', {'ppp0'})
+        derive_direction('ppp0', '', 'WAN_LOCAL-D-1', '8.8.8.8', '1.2.3.4')
+        assert parsers.get_wan_ip() == '1.2.3.4'
+
+        monkeypatch.setattr(parsers, 'WAN_IP_BY_IFACE', {'ppp0': '5.6.7.8'})
+        derive_direction('ppp0', '', 'WAN_LOCAL-D-1', '8.8.8.8', '4.3.2.1')
+        assert parsers.get_wan_ip() == '1.2.3.4'

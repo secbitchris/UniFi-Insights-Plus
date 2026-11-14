@@ -1,6 +1,8 @@
-# Lab 3.7.0 quota repair
+# Lab quota policy and upstream upgrades
 
-This overlay retains upstream revision b4617fd and its deployed base image.
+The lab branch integrates upstream v3.7.2 and retains the local quota policy.
+Dockerfile.lab builds the complete runtime and pinned Python dependencies from
+the merged source; it does not overlay new code on the old v3.7.0 runtime.
 Build only from the reviewed, pushed lab-3.7 commit. It changes no credentials,
 network policy, database schema, or existing log retention settings.
 
@@ -41,7 +43,7 @@ and the first blacklist download before expecting a healthy service.
 From a verified archive of the reviewed lab-3.7 commit on CT138:
 
 ```
-docker build -f Dockerfile.lab --build-arg SOURCE_REVISION=<commit> -t unifi-insights-lab:bl1286 .
+docker build -f Dockerfile.lab --build-arg SOURCE_REVISION=<commit> -t unifi-insights-lab:bl1329 .
 ```
 
 Keep the original private Compose file in place. Save a private local backup of

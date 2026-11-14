@@ -287,6 +287,12 @@ class TestAbuseIPDBEnricher:
         assert result == {}
         assert enricher._paused_until > _time.time()
 
+    @pytest.mark.parametrize('remaining, known', [(None, False), (0, True), (742, True)])
+    def test_is_rate_limit_known(self, remaining, known):
+        enricher = AbuseIPDBEnricher(api_key='test-key')
+        enricher._rate_limit_remaining = remaining
+        assert enricher.is_rate_limit_known() is known
+
 
 # ── _parse_bool_setting ──────────────────────────────────────────────────────
 
@@ -799,6 +805,60 @@ class TestRDNSEnricherConcurrency:
             assert r == {'rdns': 'host-1.2.3.4.example.com'}
 
 
+# ── Remote IP selection ──────────────────────────────────────────────────────
+
+class TestEnricherRemoteIpSelection:
+    def _make_enricher(self, monkeypatch):
+        monkeypatch.setattr('enrichment.GeoIPEnricher', MagicMock)
+        monkeypatch.setattr('enrichment.AbuseIPDBEnricher', MagicMock)
+        enricher = Enricher(db=None)
+        enricher.geoip.lookup = MagicMock(return_value={})
+        enricher.rdns.lookup = MagicMock(return_value={})
+        return enricher
+
+    def test_outbound_ipv6_both_global_enriches_destination(self, monkeypatch):
+        enricher = self._make_enricher(monkeypatch)
+        parsed = {
+            'log_type': 'firewall',
+            'direction': 'outbound',
+            'src_ip': '2606:4700:4700::1111',
+            'dst_ip': '2001:4860:4860::8888',
+        }
+
+        enricher.enrich(parsed)
+
+        assert parsed['remote_ip'] == '2001:4860:4860::8888'
+        enricher.geoip.lookup.assert_called_once_with('2001:4860:4860::8888')
+
+    def test_inbound_ipv6_both_global_enriches_source(self, monkeypatch):
+        enricher = self._make_enricher(monkeypatch)
+        parsed = {
+            'log_type': 'firewall',
+            'direction': 'inbound',
+            'src_ip': '2001:4860:4860::8888',
+            'dst_ip': '2606:4700:4700::1111',
+        }
+
+        enricher.enrich(parsed)
+
+        assert parsed['remote_ip'] == '2001:4860:4860::8888'
+        enricher.geoip.lookup.assert_called_once_with('2001:4860:4860::8888')
+
+    def test_no_direction_both_global_preserves_source_fallback(self, monkeypatch):
+        enricher = self._make_enricher(monkeypatch)
+        parsed = {
+            'log_type': 'firewall',
+            'direction': None,  # derive_direction's only non-directional value
+            'src_ip': '2001:4860:4860::8888',
+            'dst_ip': '2606:4700:4700::1111',
+        }
+
+        enricher.enrich(parsed)
+
+        assert parsed['remote_ip'] == '2001:4860:4860::8888'
+        enricher.geoip.lookup.assert_called_once_with('2001:4860:4860::8888')
+
+
 # ── Enricher toggle gates (live + reload) ────────────────────────────────────
 
 class TestEnricherRdnsToggle:
@@ -891,6 +951,70 @@ class TestEnricherRdnsToggle:
 
 
 # ── Backfill toggle gate ─────────────────────────────────────────────────────
+
+class TestEnricherIdentityExclusions:
+    """WAN/gateway exclusions load at init, on a WAN IP change in enrich(),
+    and on reload_config() (#103: learned identity reaches the enricher)."""
+
+    @staticmethod
+    def _make(monkeypatch, config):
+        monkeypatch.setattr('enrichment.GeoIPEnricher', MagicMock)
+        abuse = MagicMock()
+        abuse._excluded_ips = set()
+        abuse.exclude_ip.side_effect = abuse._excluded_ips.add
+        monkeypatch.setattr('enrichment.AbuseIPDBEnricher', lambda **_kw: abuse)
+        db = None
+        if config is not None:
+            db = MagicMock()
+            db.get_config.side_effect = lambda key, default=None: config.get(key, default)
+        return Enricher(db=db), abuse
+
+    def test_init_preloads_exclusions(self, monkeypatch):
+        config = {'wan_interfaces': ['eth8'], 'wan_ip_by_iface': {'eth8': '1.1.1.1'},
+                  'gateway_ips': ['192.168.1.1']}
+        e, abuse = self._make(monkeypatch, config)
+        assert {'1.1.1.1', '192.168.1.1'} <= e._excluded_ips
+        assert abuse._excluded_ips == {'1.1.1.1'}
+
+    def test_reload_config_adds_learned_identity(self, monkeypatch):
+        config = {'wan_interfaces': ['eth8']}
+        e, abuse = self._make(monkeypatch, config)
+        assert e._excluded_ips == set()
+
+        config.update({
+            'wan_interfaces': ['eth8', 'eth9'],
+            'wan_ip_by_iface': {'eth8': '1.1.1.1', 'eth9': '2.2.2.2'},
+            'gateway_ips': ['192.168.1.1', '10.0.50.1'],
+        })
+        e.reload_config()
+
+        assert e._excluded_ips == {'1.1.1.1', '2.2.2.2', '192.168.1.1', '10.0.50.1'}
+        assert abuse._excluded_ips == {'1.1.1.1', '2.2.2.2'}
+
+    def test_reload_config_without_db_does_not_raise(self, monkeypatch):
+        e, abuse = self._make(monkeypatch, None)
+        e.reload_config()
+        assert e._excluded_ips == set()
+        assert abuse._excluded_ips == set()
+
+    def test_reload_config_survives_db_error(self, monkeypatch):
+        e, _ = self._make(monkeypatch, {})
+        e._db.get_config.side_effect = Exception('db down')
+        e.reload_config()  # must not raise
+
+    def test_wan_ip_change_in_enrich_loads_identity(self, monkeypatch):
+        config = {'wan_interfaces': ['eth8']}
+        e, abuse = self._make(monkeypatch, config)
+        e.geoip.lookup = MagicMock(return_value={})
+        e.rdns.lookup = MagicMock(return_value={})
+        config.update({'wan_ip_by_iface': {'eth8': '1.1.1.1'}, 'gateway_ips': ['192.168.1.1']})
+        monkeypatch.setattr('parsers._wan_ip', '1.1.1.1')
+
+        e.enrich({'log_type': 'dhcp'})
+
+        assert {'1.1.1.1', '192.168.1.1'} <= e._excluded_ips
+        assert abuse._excluded_ips == {'1.1.1.1'}
+
 
 class TestBackfillRdnsToggle:
     """Drive the actual BackfillTask._fix_wan_ip_enrichment loop and assert
