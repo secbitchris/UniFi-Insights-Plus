@@ -29,6 +29,7 @@ from unifi_api import UniFiAPI
 from pihole_api import PiHolePoller
 from routes.auth import auth_cleanup
 from scheduler_guard import guard_job, tick_with_heartbeat
+from network_health import NetworkHealth
 
 # Set by the SIGUSR2 handler when retention_time may have changed.
 # Consumed by the scheduler loop (single-writer, single-reader — safe).
@@ -423,12 +424,16 @@ def main():
     # Wire enricher into Pi-hole poller (created before enricher for signal handler)
     pihole.set_enricher(enricher)
 
+    network_health = NetworkHealth(db)
+    network_health.start()
+
     # Start receiver
     receiver = SyslogReceiver(db, enricher)
 
     # Handle graceful shutdown
     def shutdown(signum, frame):
         logger.info("Received signal %d, shutting down...", signum)
+        network_health.stop()
         receiver.stop()
         unifi_api.stop_polling()
         pihole.stop_polling()
@@ -486,6 +491,7 @@ def main():
     try:
         receiver.start()
     except KeyboardInterrupt:
+        network_health.stop()
         receiver.stop()
         unifi_api.stop_polling()
         pihole.stop_polling()

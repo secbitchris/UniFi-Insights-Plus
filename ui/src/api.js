@@ -590,3 +590,8 @@ export async function createApiToken(payload) {
 export async function revokeApiToken(tokenId) {
   return apiFetch(`${BASE}/tokens/${encodeURIComponent(tokenId)}`, { method: 'DELETE' })
 }
+
+export function fetchNetworkHealth() { return apiFetch(`${BASE}/unifi/network-health`) }
+
+export function fetchReachability() { return apiFetch(`${BASE}/unifi/network-health/reachability`) }
+export function fetchNetworkHistory() { return apiFetch(`${BASE}/unifi/network-health/history`) }
