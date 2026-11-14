@@ -6,6 +6,7 @@ import { DashboardSkeleton } from './components/Dashboard'
 import { ThreatMapSkeleton } from './components/ThreatMap'
 import FlowViewSkeleton from './components/FlowViewSkeleton'
 
+const NetworkHealth = React.lazy(() => import('./components/NetworkHealth'))
 const Dashboard = React.lazy(() => import('./components/Dashboard'))
 const ThreatMap = React.lazy(() => import('./components/ThreatMap'))
 const FlowView = React.lazy(() => import('./components/FlowView'))
@@ -70,6 +71,7 @@ const TABS = [
   { id: 'flow-view', label: 'Flow View', shortLabel: 'Flow' },
   { id: 'threat-map', label: 'Threat Map', shortLabel: 'Map' },
   { id: 'dashboard', label: 'Dashboard', shortLabel: 'Dashboard' },
+  { id: 'network-health', label: 'Network Health', shortLabel: 'Network' },
 ]
 
 function formatShortDate(isoStr) {
@@ -865,6 +867,7 @@ export default function App() {
       <main className="flex-1 overflow-hidden">
         {activeTab === 'logs' && <LogStream version={health?.version} latestRelease={latestRelease} maxFilterDays={maxFilterDays} drillFilters={logsDrill} onDrillConsumed={clearLogsDrill} interfaces={allInterfaces} onPauseChange={onLogsPauseChange} uiSettings={uiSettings} />}
         <Suspense fallback={<DashboardSkeleton />}>
+          {activeTab === 'network-health' && <NetworkHealth />}
           {activeTab === 'dashboard' && <Dashboard maxFilterDays={maxFilterDays} />}
         </Suspense>
         <Suspense fallback={<FlowViewSkeleton />}>

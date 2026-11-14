@@ -7,11 +7,14 @@ COPY ui/ ./
 RUN npm run build
 
 FROM ghcr.io/jmasarweh/unifi-log-insight@sha256:5c5aa0a01f02a581cdcd08b3269cd1417fa57352786427963bbc51c4cdd6c95f
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client && rm -rf /var/lib/apt/lists/*
 ARG SOURCE_REVISION
 LABEL org.opencontainers.image.source="https://github.com/secbitchris/UniFi-Insights-Plus" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      org.opencontainers.image.version="3.7.0-lab.2"
+      org.opencontainers.image.version="3.7.0-lab.3"
 COPY VERSION /app/VERSION
+COPY receiver/network_*.py /app/
+COPY receiver/routes/network_health.py /app/routes/
 COPY receiver/main.py receiver/enrichment.py receiver/backfill.py receiver/scheduler_guard.py receiver/threat_refresh.py /app/
 COPY receiver/routes/abuseipdb.py receiver/routes/health.py /app/routes/
 COPY --from=ui-builder /ui/dist/ /app/static/
