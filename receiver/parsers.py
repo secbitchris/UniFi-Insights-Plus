@@ -12,6 +12,7 @@ import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from log_utils import rate_limited_warning
 from services import get_service_name
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 # ── WAN IP auto-detection ────────────────────────────────────────────────────
 _wan_ip = None
 WAN_IPS = set()  # All known WAN IPs (derived from config); replaces single _wan_ip for exclusion
-_wan_ip_by_iface_present = False  # True when authoritative wan_ip_by_iface exists
+WAN_IP_BY_IFACE: dict = {}  # loaded wan_ip_by_iface; non-empty = authoritative
 
 
 def get_wan_ip() -> str:
@@ -188,7 +189,7 @@ def _get_syslog_tz():
         return timezone.utc
 
 
-def parse_syslog_timestamp(month: str, day: str, time_str: str) -> datetime:
+def parse_syslog_timestamp(month: str, day: str, time_str: str) -> datetime | None:
     """Parse syslog timestamp. Syslog doesn't include year, so we use current year.
 
     Syslog RFC3164 timestamps carry no timezone — they are in the sender's
@@ -200,18 +201,24 @@ def parse_syslog_timestamp(month: str, day: str, time_str: str) -> datetime:
     A simple ``ts > now`` check is too aggressive — if the gateway clock is
     even a few seconds ahead of the container clock, same-day logs get stamped
     with the previous year.
+
+    Returns None when the components don't form a valid datetime — an attacker
+    on the LAN can send a syslog packet with ``Feb 99 99:99:99`` that passes
+    the header regex but fails ``datetime()`` construction, and an unhandled
+    ValueError here would crash the receiver thread.
     """
     local_tz = _get_syslog_tz()
     now = datetime.now(local_tz)
     month_num = MONTHS.get(month, 1)
-    h, m, s = time_str.split(':')
-    year = now.year
-    # Handle year rollover: only when the log month is far ahead of now
-    # (e.g. log says December but we're in January → previous year's December)
-    if month_num - now.month > 6:
-        year -= 1
-    ts = datetime(year, month_num, int(day), int(h), int(m), int(s), tzinfo=local_tz)
-    return ts.astimezone(timezone.utc)
+    try:
+        h, m, s = time_str.split(':')
+        year = now.year
+        if month_num - now.month > 6:
+            year -= 1
+        ts = datetime(year, month_num, int(day), int(h), int(m), int(s), tzinfo=local_tz)
+        return ts.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
 
 
 def derive_direction(iface_in: str, iface_out: str, rule_name: str, src_ip: str = None, dst_ip: str = None) -> str:
@@ -223,7 +230,7 @@ def derive_direction(iface_in: str, iface_out: str, rule_name: str, src_ip: str 
 
     # Auto-learn WAN IP from WAN_LOCAL rules (IN=WAN interface, public DST)
     # Only when UniFi API is unavailable and no wan_ip_by_iface is present
-    if (not _wan_ip_by_iface_present
+    if (not WAN_IP_BY_IFACE
             and iface_in in WAN_INTERFACES and 'WAN_LOCAL' in (rule_name or '') and dst_ip):
         try:
             ip = ipaddress.ip_address(dst_ip)
@@ -503,6 +510,8 @@ def parse_log(raw_log: str) -> dict | None:
         raw_log = stripped
 
     timestamp = parse_syslog_timestamp(m.group('month'), m.group('day'), m.group('time'))
+    if timestamp is None:
+        return None
     body = m.group('body')
 
     log_type = detect_log_type(body)
@@ -530,13 +539,17 @@ def parse_log(raw_log: str) -> dict | None:
             try:
                 ipaddress.ip_address(ip_val)
             except ValueError:
-                logger.warning("Invalid %s '%s' in log: %.300s", ip_field, ip_val, original_raw)
+                # Packet content is attacker-controlled: rate-limit, and use
+                # %r so embedded newlines cannot forge extra log lines.
+                rate_limited_warning(logger, f'parsers.invalid_{ip_field}',
+                                     "Invalid %s %.64r in log: %.300r", ip_field, ip_val, original_raw)
                 parsed[ip_field] = None
 
     # Validate MAC field — reject invalid macaddr values before DB insert
     mac_val = parsed.get('mac_address')
     if mac_val and not MAC_RE.fullmatch(mac_val):
-        logger.warning("Invalid mac_address '%s' in log: %.300s", mac_val, original_raw)
+        rate_limited_warning(logger, 'parsers.invalid_mac_address',
+                             "Invalid mac_address %.64r in log: %.300r", mac_val, original_raw)
         parsed['mac_address'] = None
 
     return parsed
@@ -546,25 +559,30 @@ def reload_config_from_db(db):
     """Reload WAN interfaces, labels, and WAN IPs from system_config table.
 
     Called by main.py on startup and via SIGUSR2 signal after reconfiguration.
-    Updates module-level WAN_INTERFACES, INTERFACE_LABELS, WAN_IPS, and _wan_ip.
+    Updates module-level WAN_INTERFACES, INTERFACE_LABELS, WAN_IPS,
+    WAN_IP_BY_IFACE and _wan_ip.
     """
-    global WAN_INTERFACES, INTERFACE_LABELS, _wan_ip, WAN_IPS, _wan_ip_by_iface_present
+    global WAN_INTERFACES, INTERFACE_LABELS, _wan_ip, WAN_IPS, WAN_IP_BY_IFACE
     from db import get_config, get_wan_ips_from_config
 
-    wan_list = get_config(db, 'wan_interfaces', ['ppp0'])
-    WAN_INTERFACES = set(wan_list)
-    INTERFACE_LABELS = get_config(db, 'interface_labels', {})
-
-    # Populate WAN_IPS from wan_ip_by_iface (preferred) or legacy wan_ips
-    wan_ips_list = get_wan_ips_from_config(db)
-    WAN_IPS = set(wan_ips_list)
-
-    # Track whether authoritative wan_ip_by_iface exists
-    _wan_ip_by_iface_present = bool(get_config(db, 'wan_ip_by_iface'))
-
+    # Read everything into locals first, then publish all globals together:
+    # main.py may run this on the scheduler thread while derive_direction()
+    # reads them on the receiver thread, so no reader should see a half-
+    # reloaded mix, and the published WAN_IPS set is never mutated in place.
+    wan_interfaces = set(get_config(db, 'wan_interfaces', ['ppp0']))
+    interface_labels = get_config(db, 'interface_labels', {})
+    # WAN_IPS from wan_ip_by_iface (preferred) or legacy wan_ips
+    wan_ips = set(get_wan_ips_from_config(db))
+    # Authoritative wan_ip_by_iface map (gates WAN_LOCAL auto-learn and lets
+    # main.py see which configured interfaces have no learned IP)
+    wan_ip_by_iface = get_config(db, 'wan_ip_by_iface') or {}
+    wan_ip = _wan_ip
     saved_wan_ip = get_config(db, 'wan_ip')
     if saved_wan_ip:
-        _wan_ip = saved_wan_ip
-        WAN_IPS.add(saved_wan_ip)
+        wan_ip = saved_wan_ip
+        wan_ips.add(saved_wan_ip)
+
+    (WAN_INTERFACES, INTERFACE_LABELS, WAN_IPS, WAN_IP_BY_IFACE, _wan_ip) = (
+        wan_interfaces, interface_labels, wan_ips, wan_ip_by_iface, wan_ip)
     logger.info("Config reloaded: WAN=%s, WAN_IPS=%s, Labels=%d",
                 WAN_INTERFACES, WAN_IPS, len(INTERFACE_LABELS))

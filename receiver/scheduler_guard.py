@@ -15,10 +15,10 @@ def guard_job(callback, **kwargs):
         logger.exception('Scheduled job %s failed; other jobs remain active', callback.__name__)
 
 
-def tick_with_heartbeat(callback, db):
+def tick_with_heartbeat(callback, db, **kwargs):
     """A transient tick failure must not terminate the scheduler thread."""
     try:
-        callback(db)
+        callback(db, **kwargs)
         temporary = HEARTBEAT.with_suffix('.next')
         temporary.write_text(str(time.time()))
         temporary.replace(HEARTBEAT)
