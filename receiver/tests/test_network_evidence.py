@@ -75,3 +75,38 @@ def test_policy_endpoint_only_changes_local_monitor_file(tmp_path,monkeypatch):
     assert result['saved']['status']=='retired'
     assert json.loads((tmp_path/'device-policy.json').read_text())['aa:bb:cc:dd:ee:ff']['reason']=='removed'
     with pytest.raises(Exception): route.set_device_policy('../bad',route.DevicePolicy(status='retired'))
+
+
+def test_intentionally_offline_excluded_without_retirement(tmp_path):
+    device=switch(0); device['state']=0
+    policies={device['mac']:{'status':'intentionally_offline','reason':'Off by design'}}
+    rows=device_records([device],policies,'https://controller','default',100)
+    assert rows[0]['policy']=='intentionally_offline'
+    checks=assess([device],[],[],{},str(tmp_path),policies)
+    online=next(c for c in checks if c['title']=='Devices online')
+    assert online['severity']=='ok'
+    assert '1 intentionally offline' in online['detail']
+    assert '0 retired' in online['detail']
+
+
+def test_status_only_update_preserves_expected_speed(tmp_path,monkeypatch):
+    import routes.network_health as route
+    monkeypatch.setattr(route,'ROOT',tmp_path)
+    monkeypatch.setattr(route,'read_snapshot',lambda:{'devices':[{'mac':'aa:bb:cc:dd:ee:ff'}]})
+    route.set_device_policy('aa:bb:cc:dd:ee:ff',route.DevicePolicy(status='expected',expected_speed_mbps=100))
+    route.set_device_policy('aa:bb:cc:dd:ee:ff',route.DevicePolicy(status='intentionally_offline'))
+    entry=json.loads((tmp_path/'device-policy.json').read_text())['aa:bb:cc:dd:ee:ff']
+    assert entry['status']=='intentionally_offline' and entry['expected_speed_mbps']==100
+    device={'type':'usw','name':'Flex','mac':'aa:bb:cc:dd:ee:ff','state':1,'uplink':{'uplink_mac':'parent','uplink_remote_port':3}}
+    parent={'mac':'parent','port_table':[{'port_idx':3,'up':True,'speed':100}]}
+    row=device_records([device,parent],{device['mac']:entry},'https://controller','default',100)[0]
+    assert row['expected_speed_mbps']==100 and row['uplink_speed_mbps']==100
+
+
+def test_fresher_device_uplink_wins_over_stale_parent():
+    device={'type':'usw','name':'Flex','mac':'aa','state':1,'last_seen':200,
+            'uplink':{'uplink_mac':'parent','uplink_remote_port':3,'up':True,'speed':100}}
+    parent={'mac':'parent','last_seen':100,'port_table':[{'port_idx':3,'up':False,'speed':0}]}
+    row=device_records([device,parent],{'aa':{'status':'expected','expected_speed_mbps':100}},'https://controller','default',210)[0]
+    assert row['uplink_up'] is True and row['uplink_speed_mbps']==100
+    assert row['uplink_observation_source']=='device' and row['uplink_observed_at']==200

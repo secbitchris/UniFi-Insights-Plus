@@ -39,8 +39,21 @@ it('saves device expectations through the local monitor endpoint', async () => {
   setNetworkDevicePolicy.mockResolvedValue({message:'Applied at the next scheduled collection.'})
   render(<NetworkHealth />)
   fireEvent.click(await screen.findByText(/Device expectations/))
-  const button=await screen.findByRole('button',{name:'Mark retired'})
-  fireEvent.click(button)
+  const select=await screen.findByRole('combobox',{name:'Expectation for Old switch'})
+  fireEvent.change(select,{target:{value:'retired'}})
   await waitFor(() => expect(setNetworkDevicePolicy).toHaveBeenCalledWith('aa:bb:cc:dd:ee:ff','retired',''))
   expect(await screen.findByRole('status')).toBeTruthy()
+})
+
+
+it('offers intentionally offline separately from retired', async () => {
+  const now=Date.now()/1000
+  fetchNetworkHealth.mockResolvedValue({generated:now,stale:false,checks:[],watch:{},devices:[{mac:'aa:bb:cc:dd:ee:ff',name:'Planned switch',policy:'expected',connected:false,last_seen:now-86400}]})
+  fetchReachability.mockResolvedValue([]); fetchNetworkHistory.mockResolvedValue([]); fetchNetworkEvents.mockResolvedValue([])
+  setNetworkDevicePolicy.mockResolvedValue({message:'Saved'})
+  render(<NetworkHealth />)
+  fireEvent.click(await screen.findByText(/Device expectations/))
+  const select=await screen.findByRole('combobox',{name:'Expectation for Planned switch'})
+  fireEvent.change(select,{target:{value:'intentionally_offline'}})
+  await waitFor(() => expect(setNetworkDevicePolicy).toHaveBeenCalledWith('aa:bb:cc:dd:ee:ff','intentionally_offline',''))
 })
