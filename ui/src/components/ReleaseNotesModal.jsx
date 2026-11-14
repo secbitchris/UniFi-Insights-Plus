@@ -28,7 +28,8 @@ export function renderMarkdown(md) {
 export function isNewerVersion(latest, current) {
   if (!latest || !current) return false
   const parse = v => {
-    const clean = v.replace(/^v/, '')
+    // Lab builds contain the matching stable upstream release.
+    const clean = v.replace(/^v/, '').replace(/-lab\.\d+$/, '')
     const [base, pre] = clean.split('-')
     const parts = base.split('.').map(Number)
     // stable (no pre-release) ranks higher than any beta
