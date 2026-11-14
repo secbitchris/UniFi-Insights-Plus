@@ -4,8 +4,7 @@ from pathlib import Path
 import subprocess
 import time
 
-SOURCES = [('pvecore', 'root@192.168.1.25'), ('pvemacmini', 'root@192.168.1.32'),
-           ('Study', 'chris@192.168.1.232'), ('Studio', 'chris@192.168.1.7')]
+
 
 
 def collect(root):
@@ -13,7 +12,11 @@ def collect(root):
     key = root / 'ssh' / 'id_ed25519'
     known = root / 'ssh' / 'known_hosts'
     result = []
-    for name, target in SOURCES:
+    try:
+        sources = json.loads((root / 'vantages.json').read_text())
+    except (OSError, ValueError):
+        return [{'name': 'Reachability sources', 'status': 'unknown', 'error': 'Not configured'}]
+    for name, target in sources:
         row = {'name': name, 'status': 'unknown'}
         try:
             if not key.is_file() or not known.is_file():

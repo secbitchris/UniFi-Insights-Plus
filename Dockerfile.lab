@@ -15,6 +15,6 @@ LABEL org.opencontainers.image.source="https://github.com/secbitchris/UniFi-Insi
 COPY VERSION /app/VERSION
 COPY receiver/network_*.py /app/
 COPY receiver/routes/network_health.py /app/routes/
-COPY receiver/main.py receiver/enrichment.py receiver/backfill.py receiver/scheduler_guard.py receiver/threat_refresh.py /app/
+COPY receiver/main.py receiver/api.py receiver/enrichment.py receiver/backfill.py receiver/scheduler_guard.py receiver/threat_refresh.py /app/
 COPY receiver/routes/abuseipdb.py receiver/routes/health.py /app/routes/
 COPY --from=ui-builder /ui/dist/ /app/static/
