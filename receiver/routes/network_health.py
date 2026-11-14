@@ -45,8 +45,9 @@ from network_health import write_json
 
 
 class DevicePolicy(BaseModel):
-    status: Literal['expected', 'retired']
+    status: Literal['expected', 'intentionally_offline', 'retired']
     reason: str = Field(default='', max_length=200)
+    expected_speed_mbps: Literal[10, 100, 1000, 2500, 5000, 10000] | None = None
 
 
 @router.put('/api/settings/network-health/devices/{mac}')
@@ -64,6 +65,10 @@ def set_device_policy(mac: str, policy: DevicePolicy):
             policies = json.loads((ROOT / 'device-policy.json').read_text())
         except (OSError, ValueError):
             policies = {}
-        policies[mac] = {'status': policy.status, 'reason': policy.reason.strip(), 'updated': int(time.time())}
+        entry = dict(policies.get(mac, {}))
+        entry.update(status=policy.status, reason=policy.reason.strip(), updated=int(time.time()))
+        if 'expected_speed_mbps' in policy.model_fields_set:
+            entry['expected_speed_mbps'] = policy.expected_speed_mbps
+        policies[mac] = entry
         write_json(ROOT / 'device-policy.json', policies)
     return {'saved': policies[mac], 'message': 'Applied at the next scheduled collection. Controller settings are unchanged.'}

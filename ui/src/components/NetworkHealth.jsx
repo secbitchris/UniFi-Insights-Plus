@@ -42,8 +42,7 @@ export default function NetworkHealth() {
   }, [history, range, now])
   const checks = [...(data?.checks || [])].sort((a,b) => (rank[a.severity] ?? 5)-(rank[b.severity] ?? 5))
   const stale = !!error || !!data?.stale || !recent(data?.generated, now)
-  const savePolicy = async device => {
-    const status = (pending[device.mac] || device.policy) === 'retired' ? 'expected' : 'retired'
+  const savePolicy = async (device, status) => {
     setSaving(device.mac)
     try {
       const result = await setNetworkDevicePolicy(device.mac, status, device.policy_reason || '')

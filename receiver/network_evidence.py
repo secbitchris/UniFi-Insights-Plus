@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 
 GUIDANCE = {
-    'Devices online': ('Expected devices should report to the controller. Retired inventory is shown separately.', 'Check power, uplink and last-seen time. Mark retired only when intentionally removed.'),
+    'Devices online': ('Expected devices should report to the controller. Intentionally offline and retired inventory stay visible separately.', 'Check power, uplink and last-seen time. Use intentionally offline for planned shutdowns; retired only for removed devices.'),
     'STP root bridge': ('An unexpected spanning-tree root can change switching paths.', 'Inspect the root device and switch priorities in UniFi.'),
     'STP priorities': ('Switch priorities determine which device becomes the spanning-tree root.', 'Compare intended root and backup priorities before making changes.'),
     'AP transmit health': ('This compares each AP with its own recent baseline, not other AP models.', 'Wait for baseline coverage; investigate a sustained drop before power cycling.'),
@@ -42,12 +42,24 @@ def device_records(devices, policies, host, site, now):
         mac = (device.get('mac') or '').lower()
         policy = policies.get(mac, {})
         state = policy.get('status', 'expected')
-        if state not in ('expected', 'retired'):
+        if state not in ('expected', 'intentionally_offline', 'retired'):
             state = 'expected'
+        uplink = device.get('uplink') or {}
+        parent = next((d for d in devices if d.get('mac') == uplink.get('uplink_mac')), None)
+        port = next((p for p in (parent or {}).get('port_table', []) if p.get('port_idx') == uplink.get('uplink_remote_port')), {})
+        own_seen = device.get('last_seen') or 0
+        parent_seen = (parent or {}).get('last_seen') or 0
+        use_own = isinstance(uplink.get('up'), bool) and own_seen >= parent_seen
+        link = uplink if use_own else port
         seen = device.get('last_seen')
         result.append({'mac': mac, 'name': device.get('name') or mac, 'ip': device.get('ip'),
                        'model': device.get('model'), 'policy': state,
                        'policy_reason': policy.get('reason', ''),
+                       'expected_speed_mbps': policy.get('expected_speed_mbps'),
+                       'uplink_up': link.get('up'),
+                       'uplink_speed_mbps': link.get('speed') if link.get('up') else None,
+                       'uplink_observation_source': 'device' if use_own else 'parent',
+                       'uplink_observed_at': own_seen if use_own else parent_seen,
                        'connected': device.get('state') == 1,
                        'last_seen': seen, 'last_seen_age_seconds': max(0, now-seen) if isinstance(seen, (float, int)) else None,
                        'unifi_url': url})

@@ -9,13 +9,14 @@ def assess(dev, sta, wlan, expected, DIR, policies=None):
 
     def add(sev, title, detail, items=None):
         checks.append({'severity': sev, 'title': title, 'detail': detail, 'items': items or [], 'why': WHY.get(title, '')})
-    expected_devices = [d for d in dev if d.get('type') in ('uap', 'usw') and policies.get((d.get('mac') or '').lower(), {}).get('status') != 'retired']
+    expected_devices = [d for d in dev if d.get('type') in ('uap', 'usw') and policies.get((d.get('mac') or '').lower(), {}).get('status') not in ('retired', 'intentionally_offline')]
     off = [d.get('name') for d in expected_devices if d.get('state') is not None and d.get('state') != 1]
     missing_state = [d.get('name') for d in expected_devices if d.get('state') is None]
-    retired_count = len(aps) + len(sws) - len(expected_devices)
+    intentionally_offline_count = sum(policies.get((d.get('mac') or '').lower(), {}).get('status') == 'intentionally_offline' for d in aps + sws)
+    retired_count = len(aps) + len(sws) - len(expected_devices) - intentionally_offline_count
     add(CRIT if off else ('unknown' if missing_state else OK), 'Devices online',
-        f'{len(off)} expected device(s) disconnected; {len(missing_state)} unreported; {retired_count} retired excluded.' if off or missing_state else
-        f'All {len(expected_devices)} expected devices connected; {retired_count} retired excluded.', off + missing_state)
+        f'{len(off)} expected device(s) disconnected; {len(missing_state)} unreported; {intentionally_offline_count} intentionally offline; {retired_count} retired excluded.' if off or missing_state else
+        f'All {len(expected_devices)} expected devices connected; {intentionally_offline_count} intentionally offline; {retired_count} retired excluded.', off + missing_state)
     roots = {d.get('root_switch') for d in sws if d.get('root_switch')}
     bad_roots = []
     for r in roots:

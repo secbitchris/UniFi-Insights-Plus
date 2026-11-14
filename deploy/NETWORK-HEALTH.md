@@ -73,3 +73,15 @@ account. It preserves the login-agent plists and refuses duplicates. Run locally
 with sudo after reviewing the installer. No reboot or network change is performed.
 Rollback: boot out the two com.unifi-insights.study-* jobs, remove their matching
 LaunchDaemon plists, and restore the saved user LaunchAgent plists when desired.
+
+### Planned offline state and link expectations
+
+`intentionally_offline` is distinct from `retired`: the device remains in use but
+is not expected online at present. Both remain visible and are excluded from the
+offline alarm. Changing to `expected` restores offline alerting. These are local
+monitor classifications and do not change UniFi configuration.
+
+The policy can record `expected_speed_mbps`; later status-only updates preserve
+it. Link metadata uses the newer device/parent observation and identifies its
+source, avoiding a stale parent snapshot overriding a fresh reconnect report.
+Expected speed is a monitoring value, never a forced negotiation setting.
