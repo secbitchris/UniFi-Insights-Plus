@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react'
 import NetworkHealthHistory from './NetworkHealthHistory'
 import NetworkHealthReachability from './NetworkHealthReachability'
 import NetworkHealthDevices from './NetworkHealthDevices'
+import NetworkHealthLinks from './NetworkHealthLinks'
 import { recent, age, date } from '../lib/networkHealth'
-import { fetchNetworkHealth, fetchReachability, fetchNetworkHistory, fetchNetworkEvents, setNetworkDevicePolicy } from '../api'
+import { fetchNetworkHealth, fetchReachability, fetchNetworkHistory, fetchNetworkEvents, fetchNetworkLinks, setNetworkDevicePolicy } from '../api'
 
 const color = { critical: 'text-red-400', warning: 'text-amber-300', unknown: 'text-slate-400', info: 'text-sky-300', ok: 'text-emerald-400' }
 const rank = { critical: 0, warning: 1, unknown: 2, info: 3, ok: 4 }
@@ -13,6 +14,7 @@ export default function NetworkHealth() {
   const [reach, setReach] = useState([])
   const [history, setHistory] = useState([])
   const [events, setEvents] = useState([])
+  const [links, setLinks] = useState(null)
   const [error, setError] = useState('')
   const [range, setRange] = useState(24)
   const [saving, setSaving] = useState('')
@@ -23,8 +25,8 @@ export default function NetworkHealth() {
     let active = true
     const refresh = async () => {
       try {
-        const [next, locations, past, changes] = await Promise.all([fetchNetworkHealth(), fetchReachability(), fetchNetworkHistory(), fetchNetworkEvents()])
-        if (active) { setData(next); setReach(locations); setHistory(past); setEvents(changes); setError(''); setPending(old => Object.fromEntries(Object.entries(old).filter(([mac,value]) => next.devices?.find(d => d.mac === mac)?.policy !== value))) }
+        const [next, locations, past, changes, linkData] = await Promise.all([fetchNetworkHealth(), fetchReachability(), fetchNetworkHistory(), fetchNetworkEvents(), Promise.resolve(fetchNetworkLinks()).catch(() => null)])
+        if (active) { setData(next); setReach(locations); setHistory(past); setEvents(changes); setLinks(linkData); setError(''); setPending(old => Object.fromEntries(Object.entries(old).filter(([mac,value]) => next.devices?.find(d => d.mac === mac)?.policy !== value))) }
       } catch { if (active) setError('Unable to refresh network health. Displayed results may be stale.') }
     }
     refresh()
@@ -57,6 +59,7 @@ export default function NetworkHealth() {
     <p className="text-sm text-gray-300 my-3">Last collection: {date(data?.generated)} · {age(data?.generated, now)}</p>
     {(error || stale) && <p role="alert" className="text-amber-300 mb-4">{error || 'Collection is stale. Do not treat these results as current.'}</p>}
     <div className="flex flex-wrap gap-4 mb-5">{Object.entries(data?.counts || {}).map(([severity,count]) => <span key={severity} className={stale ? color.unknown : color[severity]}>{count} {severity}</span>)}</div>
+    <NetworkHealthLinks report={links} now={now}/>
     <div className="grid gap-3">
       {checks.map(check => <details key={check.title} className="rounded-lg border border-gray-800 bg-gray-900 p-4">
         <summary className="cursor-pointer flex justify-between gap-3"><span className="text-white">{check.title}</span><span className={stale ? color.unknown : color[check.severity] || color.unknown}>{stale ? 'stale' : check.severity || 'unknown'}</span></summary>

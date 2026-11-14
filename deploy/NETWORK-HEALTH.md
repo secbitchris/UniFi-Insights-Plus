@@ -85,3 +85,30 @@ The policy can record `expected_speed_mbps`; later status-only updates preserve
 it. Link metadata uses the newer device/parent observation and identifies its
 source, avoiding a stale parent snapshot overriding a fresh reconnect report.
 Expected speed is a monitoring value, never a forced negotiation setting.
+
+## Ethernet evidence (BL-1331)
+
+A separate read-only worker samples stat/device once per minute. It retains ten
+preceding samples per device and captures an incident when a fresh connected
+link reports 100 Mbps or less against an explicit gigabit-or-faster expectation
+or a previously observed faster baseline on that same uplink. Explicit 100 Mbps,
+intentionally offline and retired policies do not create incidents.
+
+Captures include allowlisted AP and parent-switch identity, firmware, uptime,
+port negotiation, PoE status, errors, drops, link-down counts, and derived
+transitions. Both endpoints are saved. Counter resets, unchanged source
+timestamps, stale observations, long gaps and changed uplinks cannot be treated
+as measured error deltas. Native controller event logs are not collected: the
+timeline describes observations between polls, not exact event times.
+Transitions shorter than a poll interval may be missed.
+
+State is atomically persisted in link-evidence.json on the existing volume.
+The UI warns about unresolved incidents, shows the latest ten with active
+incidents first, and exports incident or full retained evidence as JSON.
+Each incident keeps its trigger and up to 59 later samples, plus ten preceding
+samples. Retention is thirty days, capped at 100 incidents and 1000 transitions.
+Active incidents survive API failures, missing inventory, and app restarts;
+only observed speed recovery or an expectation change closes them. All
+collection failures become stale/unknown within three minutes, preserving
+prior evidence. No automatic reboot, PoE cycle, port change, or extra
+AbuseIPDB lookup is performed.

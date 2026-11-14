@@ -72,3 +72,9 @@ def set_device_policy(mac: str, policy: DevicePolicy):
         policies[mac] = entry
         write_json(ROOT / 'device-policy.json', policies)
     return {'saved': policies[mac], 'message': 'Applied at the next scheduled collection. Controller settings are unchanged.'}
+
+
+@router.get('/api/unifi/network-health/links')
+def network_link_evidence():
+    from network_links import read_report
+    return read_report(ROOT)
