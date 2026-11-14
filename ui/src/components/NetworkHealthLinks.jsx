@@ -31,6 +31,7 @@ export default function NetworkHealthLinks({ report, now }) {
   return <section className="mb-5 rounded-lg border border-gray-700 bg-gray-900 p-4">
     <h2 className="text-lg text-white">Ethernet link evidence</h2>
     <p className="text-sm text-gray-400 mt-2">Links are sampled every minute. A known or expected gigabit link reporting 100 Mbps or less captures its preceding observations and subsequent recovery. Evidence survives app and AP restarts.</p>
+    <p className="text-xs text-gray-400 mt-2">FE notifications: {report?.notifications?.status || 'disabled'}{report?.notifications?.failed ? ` · ${report.notifications.failed} failed delivery(s)` : ''}</p>
     <p className="text-sm text-gray-300 mt-2">{monitored.length} link(s) with a gigabit-or-faster expectation or learned baseline.</p>
     <p className="text-xs text-gray-400 mt-2">Last successful sample: {date(report?.generated)} · {age(report?.generated, now)}. Sampled changes between polls may be missed; native controller events are shown separately.</p>
     <p className="text-xs text-gray-400 mt-2">Native controller logs: {native?.status || 'not yet collected'} · last successful query {age(native?.last_success, now)}{native?.truncated ? ' · result limit reached; coverage is partial' : ''}. Missing events do not establish a cause.</p>
