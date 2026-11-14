@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import NetworkCaptureHistory from './NetworkCaptureHistory'
 import NetworkHealthHistory from './NetworkHealthHistory'
 import NetworkHealthReachability from './NetworkHealthReachability'
 import NetworkHealthDevices from './NetworkHealthDevices'
@@ -59,6 +60,7 @@ export default function NetworkHealth() {
     <p className="text-sm text-gray-300 my-3">Last collection: {date(data?.generated)} · {age(data?.generated, now)}</p>
     {(error || stale) && <p role="alert" className="text-amber-300 mb-4">{error || 'Collection is stale. Do not treat these results as current.'}</p>}
     <div className="flex flex-wrap gap-4 mb-5">{Object.entries(data?.counts || {}).map(([severity,count]) => <span key={severity} className={stale ? color.unknown : color[severity]}>{count} {severity}</span>)}</div>
+    <NetworkCaptureHistory/>
     <NetworkHealthLinks report={links} now={now}/>
     <div className="grid gap-3">
       {checks.map(check => <details key={check.title} className="rounded-lg border border-gray-800 bg-gray-900 p-4">
