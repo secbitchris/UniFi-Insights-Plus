@@ -595,3 +595,10 @@ export function fetchNetworkHealth() { return apiFetch(`${BASE}/unifi/network-he
 
 export function fetchReachability() { return apiFetch(`${BASE}/unifi/network-health/reachability`) }
 export function fetchNetworkHistory() { return apiFetch(`${BASE}/unifi/network-health/history`) }
+
+export function fetchNetworkEvents() { return apiFetch(`${BASE}/unifi/network-health/events`) }
+export function setNetworkDevicePolicy(mac, status, reason = '') {
+  return apiFetch(`${BASE}/settings/network-health/devices/${encodeURIComponent(mac)}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({status, reason}),
+  })
+}
