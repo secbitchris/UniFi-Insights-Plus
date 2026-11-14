@@ -89,7 +89,7 @@ def collect(client, root=ROOT, dns_assess=network_dns.assess):
         response = client._get_session().get(url, timeout=10)
         response.raise_for_status()
         records = response.json()
-        if not isinstance(records, list) or len(records) > 32:
+        if not isinstance(records, list) or len(records) > 64:
             raise ValueError('Unsupported static DNS response')
         return records
 
