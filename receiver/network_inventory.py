@@ -21,9 +21,21 @@ def assess(dev, sta, wlan, expected, DIR):
     else:
         rn = [names.get(r) for r in roots]
         add(OK, 'STP root bridge', f"root is {', '.join((x for x in rn if x))}", [])
-    weak = [f"{d.get('name')} = {d.get('stp_priority')}" for d in sws if d.get('stp_priority') is not None and d.get('stp_priority') >= 32768]
-    stpv = sorted((d.get('stp_priority') for d in sws if d.get('stp_priority') is not None))
-    add(WARN if weak else OK, 'STP priorities', 'switch(es) at priority >=32768 can lose root election to a Sonos device (Sonos advertises ~32768)' if weak else 'all ' + str(len(stpv)) + ' STP-capable switches below 32768 (root ' + str(stpv[0] if stpv else '-') + ', backup ' + str(stpv[1] if len(stpv) > 1 else '-') + '); ' + str(len(sws) - len(stpv)) + ' Flex switch(es) have no STP', weak)
+    priorities = []
+    for device in sws:
+        try:
+            raw = device.get('stp_priority')
+            value = int(raw)
+            if isinstance(raw, bool) or str(value) != str(raw) or not 0 <= value <= 65535:
+                continue
+            priorities.append((device.get('name'), value))
+        except (TypeError, ValueError):
+            continue
+    weak = [f'{name} = {value}' for name, value in priorities if value >= 32768]
+    stpv = sorted(value for _, value in priorities)
+    add(WARN if weak else (OK if stpv else 'unknown'), 'STP priorities',
+        'Switch priorities at or above 32768 can lose root selection to another device.' if weak
+        else f'{len(stpv)} switch priorities assessed; {len(sws) - len(stpv)} unavailable or unsupported.', weak)
     TXHIST = DIR + '/aptxhist.json'
     TX_MIN_CLIENTS = 3
     TX_WINDOW = 6

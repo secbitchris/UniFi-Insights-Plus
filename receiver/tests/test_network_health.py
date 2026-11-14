@@ -81,3 +81,9 @@ def test_per_model_load_and_unknown_radio_baseline(tmp_path):
     assert 'Attic' in str(checks['AP load']['items'])
     assert 'Studio' not in str(checks['AP load']['items'])
     assert checks['AP transmit health']['severity'] == 'unknown'
+
+
+@pytest.mark.parametrize('priority, expected', [('4096', 'ok'), ('32768', 'warning'), (None, 'unknown'), ('invalid', 'unknown')])
+def test_controller_priority_types(tmp_path, priority, expected):
+    result = network_inventory.assess([{'type': 'usw', 'name': 'Switch', 'mac': 'aa', 'state': 1, 'stp_priority': priority}], [], [], {}, str(tmp_path))
+    assert next(c for c in result if c['title'] == 'STP priorities')['severity'] == expected
