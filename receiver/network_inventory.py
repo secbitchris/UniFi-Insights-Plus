@@ -1,6 +1,7 @@
 from network_basics import *
 
-def assess(dev, sta, wlan, expected, DIR):
+def assess(dev, sta, wlan, expected, DIR, policies=None):
+    policies = policies or {}
     aps = [d for d in dev if d.get('type') == 'uap']
     sws = [d for d in dev if d.get('type') == 'usw']
     names = {d.get('mac'): d.get('name') for d in dev}
@@ -8,8 +9,13 @@ def assess(dev, sta, wlan, expected, DIR):
 
     def add(sev, title, detail, items=None):
         checks.append({'severity': sev, 'title': title, 'detail': detail, 'items': items or [], 'why': WHY.get(title, '')})
-    off = [d.get('name') for d in dev if d.get('type') in ('uap', 'usw') and d.get('state') != 1]
-    add(CRIT if off else OK, 'Devices online', f'{len(off)} device(s) not in connected state' if off else f'all {len(aps) + len(sws)} APs and switches connected', off)
+    expected_devices = [d for d in dev if d.get('type') in ('uap', 'usw') and policies.get((d.get('mac') or '').lower(), {}).get('status') != 'retired']
+    off = [d.get('name') for d in expected_devices if d.get('state') is not None and d.get('state') != 1]
+    missing_state = [d.get('name') for d in expected_devices if d.get('state') is None]
+    retired_count = len(aps) + len(sws) - len(expected_devices)
+    add(CRIT if off else ('unknown' if missing_state else OK), 'Devices online',
+        f'{len(off)} expected device(s) disconnected; {len(missing_state)} unreported; {retired_count} retired excluded.' if off or missing_state else
+        f'All {len(expected_devices)} expected devices connected; {retired_count} retired excluded.', off + missing_state)
     roots = {d.get('root_switch') for d in sws if d.get('root_switch')}
     bad_roots = []
     for r in roots:
@@ -79,20 +85,29 @@ def assess(dev, sta, wlan, expected, DIR):
             pass
     hi = [f'{n} load={v:.2f} (model {m}, ceiling {LOAD_CEILING.get(m, LOAD_DEFAULT)}, {c} clients)' for n, m, v, c in loads if v > LOAD_CEILING.get(m, LOAD_DEFAULT)]
     add(WARN if hi else OK, 'AP load', "AP(s) above their model's load ceiling" if hi else f"all {len(loads)} APs within their model's load ceiling", hi)
-    drift = []
+    drift, unavailable, disabled = [], [], []
     for a in aps:
         exp = expected.get(a.get('name'))
         if not exp:
             continue
-        cfg = next((r for r in a.get('radio_table', []) if r.get('radio') == 'na'), {})
-        live = next((r for r in a.get('radio_table_stats', []) if r.get('radio') == 'na'), {})
-        if exp.get('na') and live.get('channel') != exp['na']:
-            drift.append(f"{a.get('name')} 5GHz on {live.get('channel')}, plan says {exp['na']}")
-        eng = exp.get('ng')
-        lng = next((r for r in a.get('radio_table_stats', []) if r.get('radio') == 'ng'), {})
-        if eng and lng.get('channel') != eng:
-            drift.append(f"{a.get('name')} 2.4GHz on {lng.get('channel')}, plan says {eng}")
-    add(WARN if drift else OK, 'Channel plan', 'live channels differ from the intended plan' if drift else f'all {len(expected)} planned APs on their assigned channels' if expected else 'no expected plan configured', drift)
+        for band, label in [('na', '5GHz'), ('ng', '2.4GHz')]:
+            if not exp.get(band):
+                continue
+            cfg = next((r for r in a.get('radio_table', []) if r.get('radio') == band), {})
+            live = next((r for r in a.get('radio_table_stats', []) if r.get('radio') == band), {})
+            identity = f"{a.get('name')} {label}"
+            if cfg.get('tx_power_mode') == 'disabled' or cfg.get('disabled') or cfg.get('radio_disable') or cfg.get('enabled') is False:
+                disabled.append(identity + ': disabled in UniFi')
+            elif live.get('channel') is None:
+                unavailable.append(identity + ': channel not reported')
+            elif live['channel'] != exp[band]:
+                drift.append(f"{identity} on {live['channel']}, plan says {exp[band]}")
+    add(WARN if drift else ('unknown' if unavailable else (INFO if disabled else OK)), 'Channel plan',
+        'Enabled radios differ from the intended plan.' if drift else
+        'Some enabled radios have no channel observation.' if unavailable else
+        'Enabled radios match the plan; disabled radios are excluded.' if disabled else
+        'Enabled radios match the configured plan.' if expected else 'No expected plan configured.',
+        drift + unavailable + disabled)
     vac = []
     for a in aps:
         for band in ('na', 'ng'):
@@ -142,15 +157,4 @@ def assess(dev, sta, wlan, expected, DIR):
                 srx = r.get('cu_self_rx') or 0
                 busy.append(f"{a.get('name')} {('5GHz' if r.get('radio') == 'na' else '2.4GHz')} ch{r.get('channel')} at {cu}% (self {stx + srx}%, other {cu - stx - srx}%; {a.get('model')} ceiling {ceil}%)")
     add(WARN if busy else OK, 'Channel utilisation', "radio(s) above their generation's airtime ceiling" if busy else f"all radios within their generation's ceiling (AC-gen {CU_CEILING_AC}%, U6/U7-gen {CU_CEILING_U6}%)", busy)
-    perr = []
-    for s in sws:
-        for p in s.get('port_table', []):
-            if not p.get('up'):
-                continue
-            if 'SFP' in str(p.get('name', '')):
-                continue
-            e = (p.get('rx_errors') or 0) + (p.get('tx_errors') or 0)
-            if e > 1000:
-                perr.append(f"{s.get('name')} port {p.get('port_idx')}: {e} errors")
-    add(WARN if perr else OK, 'Switch port errors', 'copper port(s) with significant error counts' if perr else 'no copper port errors (SFP counters excluded — proven unreliable on this site)', perr)
     return checks

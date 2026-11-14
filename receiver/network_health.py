@@ -16,6 +16,7 @@ import network_inventory
 import network_radio
 import network_dns
 import network_reachability
+import network_evidence
 
 log = logging.getLogger(__name__)
 INTERVAL = 300
@@ -54,6 +55,9 @@ def collect(client, root=ROOT, dns_assess=network_dns.assess):
     checks = []
     dev = sta = wlan = []
     controller_error = None
+    policies = network_evidence.load_json(root / "device-policy.json", {})
+    now = int(time.time())
+    device_rows = []
     try:
         if not client.enabled:
             raise ValueError('UniFi integration unavailable')
@@ -66,8 +70,12 @@ def collect(client, root=ROOT, dns_assess=network_dns.assess):
             expected = json.loads((root / 'expected.json').read_text())
         except (OSError, ValueError):
             expected = {}
-        checks.extend(network_inventory.assess(dev, sta, wlan, expected, str(root)))
+        checks.extend(network_inventory.assess(dev, sta, wlan, expected, str(root), policies))
         checks.extend(network_radio.assess(dev, sta, wlan, expected, str(root)))
+        port_check, port_samples = network_evidence.port_errors(dev, network_evidence.load_json(root / 'port-counters.json', {}), now)
+        checks.append(port_check)
+        write_json(root / 'port-counters.json', port_samples)
+        device_rows = network_evidence.device_records(dev, policies, client.host, client.site, now)
         if not expected:
             for check in checks:
                 if check['title'] == 'Channel plan':
@@ -115,7 +123,11 @@ def collect(client, root=ROOT, dns_assess=network_dns.assess):
         if c:
             watch[mac].update(ap=names.get(c.get('ap_mac')), signal=c.get('signal'), channel=c.get('channel'), uptime=c.get('uptime'))
     speedtests = [d['speedtest-status'] for d in dev if d.get('speedtest-status', {}).get('rundate')]
-    out = {'generated': now, 'controller_error': controller_error, 'checks': checks, 'watch': watch,
+    states, events = network_evidence.annotate(checks, device_rows, network_evidence.load_json(root / 'check-states.json', {}), now)
+    write_json(root / 'check-states.json', states)
+    previous_events = network_evidence.load_json(root / 'events.json', [])
+    write_json(root / 'events.json', [e for e in previous_events if now - 7*86400 <= e['at'] <= now][-1000:] + events)
+    out = {'devices': device_rows, 'generated': now, 'controller_error': controller_error, 'checks': checks, 'watch': watch,
            'speedtests': [{k: s.get(k) for k in ('rundate', 'xput_download', 'xput_upload', 'latency')} for s in speedtests],
            'inventory': {'aps': sum(d.get('type') == 'uap' for d in dev), 'switches': sum(d.get('type') == 'usw' for d in dev), 'clients': len(sta)}}
     out['counts'] = {s: sum(c['severity'] == s for c in checks) for s in ('critical', 'warning', 'unknown', 'info', 'ok')}
@@ -127,6 +139,7 @@ def collect(client, root=ROOT, dns_assess=network_dns.assess):
     history = [h for h in history if now - 7 * 86400 <= h.get('generated', 0) <= now][-2015:]
     # Summary history excludes raw controller responses and credentials.
     history.append({k: out[k] for k in ('generated', 'counts', 'watch', 'speedtests')})
+    history[-1]['checks'] = [{'title': c['title'], 'severity': c['severity']} for c in checks]
     write_json(root / 'history.json', history)
     return out
 

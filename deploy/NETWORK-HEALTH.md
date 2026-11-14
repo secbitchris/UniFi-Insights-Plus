@@ -52,3 +52,24 @@ verified; retain the independent reachability producers and their evidence.
 Point dashboard links to the new Network Health tab. Rollback restores the prior
 Compose override and enables the old CT113 units; do not delete history or reset
 provider quota state. Stop on unexpected deployment drift.
+
+## Evidence improvements (BL-1327)
+
+Disabled radios are listed separately from channel drift. Enabled radios without
+a channel observation stay unknown. Port alerts use new errors between comparable
+samples; resets and long gaps invalidate rates, while lifetime totals remain
+visible context. Device last-seen times and explicit expected/retired policy are
+local monitor state. Retired excludes a device only from the offline alert; it
+does not delete or change it in UniFi. Settings writes use settings.write auth.
+
+The UI separates fetch time from source sample time, hides stale latency, shows
+warning status-since and clear transitions, and charts the last 24 hours or seven
+days. Check explanations and device links accompany the evidence. Existing older
+history has aggregate counts; per-check transitions begin after this upgrade.
+
+For a headless Mac, deploy/study-probe/install.py installs the existing probe and
+aggregator as system LaunchDaemons with UserName set to the existing non-root
+account. It preserves the login-agent plists and refuses duplicates. Run locally
+with sudo after reviewing the installer. No reboot or network change is performed.
+Rollback: boot out the two com.unifi-insights.study-* jobs, remove their matching
+LaunchDaemon plists, and restore the saved user LaunchAgent plists when desired.
