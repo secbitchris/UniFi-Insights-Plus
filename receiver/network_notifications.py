@@ -41,9 +41,9 @@ def send(config, incident):
                            Click=app_url)
             response = session.post(url, data=text.encode(), headers=headers, timeout=10,
                                     allow_redirects=False)
-        elif config['kind'] == 'home_assistant':
+        elif config['kind'] == 'home_assistant_webhook':
             response = session.post(url, json={'title': 'Ethernet speed drop', 'message': text,
-                                    'data': {'tag': incident['id'], 'url': app_url}},
+                                    'incident_id': incident['id'], 'url': app_url},
                                     headers=headers, timeout=10, allow_redirects=False)
         else:
             raise ValueError('Unsupported notification route')

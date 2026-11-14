@@ -60,3 +60,18 @@ def test_multiple_incidents_are_delivered_on_subsequent_ticks(tmp_path):
     deliver(tmp_path,report,162,sender)
     assert sender.call_count==2
     assert public_status(tmp_path)['sent']==2
+
+def test_home_assistant_webhook_payload_has_stable_incident_id(monkeypatch):
+    from network_notifications import send
+    session=Mock()
+    session.__enter__=Mock(return_value=session)
+    session.__exit__=Mock(return_value=False)
+    response=Mock(status_code=200)
+    session.post.return_value=response
+    monkeypatch.setattr('network_notifications.requests.Session',lambda:session)
+    send({'kind':'home_assistant_webhook','url':'http://ha.test/api/webhook/private','app_url':'https://app.test'},incident())
+    request=session.post.call_args.kwargs
+    assert request['json']['incident_id']=='new'
+    assert request['json']['url']=='https://app.test'
+    assert request['allow_redirects'] is False
+    assert 'Authorization' not in request['headers']
