@@ -604,3 +604,5 @@ export function setNetworkDevicePolicy(mac, status, reason = '') {
 }
 
 export function fetchNetworkLinks() { return apiFetch(`${BASE}/unifi/network-health/links`) }
+
+export function fetchCaptureHistory() { return apiFetch(`${BASE}/unifi/network-health/capture`) }

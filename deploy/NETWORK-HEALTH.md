@@ -147,3 +147,15 @@ notification tag replaces that incident's previous notification. Delivery
 status and failure count are visible in Network Health. No recovery or periodic
 unchanged-state notifications are sent. A destination test is explicitly
 labeled and uses a separate ID.
+
+## Capture loss correlation (BL-1339)
+
+The Capture loss & mirror traffic chart reads a compact seven-day export from
+pvecore's corelight-history collector in the existing private volume. The API
+inherits unifi.read authorization. Its shared time axis uses the loss record's
+measurement timestamp and switch last_seen, not arrival time. One-minute buckets
+retain peak loss; destination port 6 TX is the measured interval-average Mbps.
+Missing minutes and unavailable rates stay null. The chart includes a 1% loss
+reference and 1h/6h/24h/7d views; browser-local times appear on the axis/tooltip.
+The snapshot becomes stale after three minutes. No extra controller or provider
+calls are made, and existing history/FE/quota state remains intact.

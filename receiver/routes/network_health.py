@@ -78,3 +78,9 @@ def set_device_policy(mac: str, policy: DevicePolicy):
 def network_link_evidence():
     from network_links import read_report
     return read_report(ROOT)
+
+
+@router.get('/api/unifi/network-health/capture')
+def network_capture_history():
+    from corelight_history import read_history
+    return read_history()
