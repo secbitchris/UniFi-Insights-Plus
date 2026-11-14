@@ -49,3 +49,14 @@ def test_failure_is_bounded(tmp_path):
         deliver(tmp_path,{'incidents':[incident()]},now,sender)
     assert sender.call_count==5
     assert public_status(tmp_path)['failed']==1
+
+def test_multiple_incidents_are_delivered_on_subsequent_ticks(tmp_path):
+    configure(tmp_path)
+    sender=Mock()
+    deliver(tmp_path,{'incidents':[]},100,sender)
+    report={'incidents':[incident(101,'first'),incident(101,'second')]}
+    deliver(tmp_path,report,102,sender)
+    assert sender.call_count==1
+    deliver(tmp_path,report,162,sender)
+    assert sender.call_count==2
+    assert public_status(tmp_path)['sent']==2
