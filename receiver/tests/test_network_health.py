@@ -87,3 +87,20 @@ def test_per_model_load_and_unknown_radio_baseline(tmp_path):
 def test_controller_priority_types(tmp_path, priority, expected):
     result = network_inventory.assess([{'type': 'usw', 'name': 'Switch', 'mac': 'aa', 'state': 1, 'stp_priority': priority}], [], [], {}, str(tmp_path))
     assert next(c for c in result if c['title'] == 'STP priorities')['severity'] == expected
+
+
+def test_live_sized_dns_override_inventory_is_not_discarded(tmp_path, monkeypatch):
+    import network_health
+    monkeypatch.setattr(network_health.network_inventory, 'assess', lambda *args: [])
+    monkeypatch.setattr(network_health.network_radio, 'assess', lambda *args: [])
+    client = Client()
+    client._get = lambda path: {'data': [{'type': 'usw'}]} if path == 'stat/device' else {'data': []}
+    response = Mock()
+    response.json.return_value = [{'enabled': True, 'record_type': 'A', 'key': f'host{i}.example', 'value': '192.0.2.1'} for i in range(46)]
+    client._get_session = lambda: Mock(get=lambda *a, **kw: response)
+    def dns(host, root, get_static):
+        assert len(get_static()) == 46
+        return [{'title': 'DNS override integrity', 'severity': 'ok'}]
+    out = collect(client, tmp_path, dns_assess=dns)
+    assert out['controller_error'] is None
+    assert out['counts']['ok'] == 1
