@@ -10,6 +10,7 @@ import ipaddress
 import os
 import logging
 import requests
+import blacklist_guard
 
 from db import get_config, get_wan_ips_from_config
 
@@ -35,6 +36,19 @@ class BlacklistFetcher:
         self.enabled = bool(self.api_key)
 
     def fetch_and_store(self):
+        if not self.enabled:
+            return 0
+        try:
+            with blacklist_guard.attempt() as ticket:
+                if ticket is None:
+                    logger.info("Blacklist download skipped: persistent freshness/backoff guard")
+                    return 0
+                return self._fetch_and_store(ticket)
+        except Exception as exc:
+            logger.warning("Blacklist download guard failed (%s); skipping request", type(exc).__name__)
+            return 0
+
+    def _fetch_and_store(self, ticket):
         """Pull blacklist and upsert into ip_threats. Returns count of IPs stored."""
         if not self.enabled:
             logger.warning("Blacklist fetch skipped — no API key")
@@ -55,7 +69,8 @@ class BlacklistFetcher:
             )
 
             if resp.status_code == 429:
-                logger.warning("Blacklist fetch rate limited (429)")
+                blacklist_guard.rate_limited(ticket, resp.headers)
+                logger.warning("Blacklist fetch rate limited (429); backoff persisted")
                 return 0
 
             resp.raise_for_status()
@@ -93,6 +108,7 @@ class BlacklistFetcher:
             # Bulk upsert into ip_threats
             count = self.db.bulk_upsert_threats(entries)
             logger.info("Blacklist: fetched %d IPs, upserted %d into ip_threats", len(entries), count)
+            blacklist_guard.completed(ticket, count)
             return count
 
         except requests.Timeout:
