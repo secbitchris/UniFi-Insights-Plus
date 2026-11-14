@@ -9,6 +9,7 @@ from network_evidence import load_json
 from network_link_samples import observations
 from network_link_state import transition
 from network_native_events import capture
+from network_notifications import deliver, public_status
 from unifi_api import UniFiAPI
 
 log = logging.getLogger(__name__)
@@ -43,6 +44,10 @@ def poll(client, root, now=None):
     if client.enabled:
         capture(client, state, now)
     save(root, state)
+    try:
+        deliver(root, state, now)
+    except Exception:
+        log.exception("FE notification persistence failed; link evidence retained")
     return state
 
 
@@ -56,6 +61,7 @@ def read_report(root, now=None):
             'incidents': state.get('incidents', []), 'events': state.get('events', []),
             'observations': state.get('observations', []),
             'native': state.get('native', {}),
+            'notifications': public_status(root),
             'native_event_history': 'Native controller system logs and sampled transitions are labeled separately.'}
 
 

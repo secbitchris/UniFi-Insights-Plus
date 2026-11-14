@@ -130,3 +130,20 @@ after recovery. Native and sampled records remain separate in the UI and JSON.
 A matching event is context, not proof of the physical cause. The controller may
 not emit an event for every Ethernet renegotiation. No logging settings, device
 configuration or credentials are changed.
+
+## FE phone notifications (BL-1334)
+
+The collector saves incident evidence before attempting notification. An
+operator-owned notification-config.json in the existing private network-health
+volume selects a local Home Assistant webhook; no general HA token is copied.
+The dedicated HA automation forwards to the chosen mobile_app notification
+service, with the incident ID as the notification tag and an app link.
+
+Delivery state is atomic and persists across restarts. Existing incidents are
+not replayed when enabling/re-enabling. One pending attempt is made per poll;
+failures retry with exponential delays, at most five attempts. Success is not
+resent. A lost HTTP acknowledgement can still cause a retry; the stable mobile
+notification tag replaces that incident's previous notification. Delivery
+status and failure count are visible in Network Health. No recovery or periodic
+unchanged-state notifications are sent. A destination test is explicitly
+labeled and uses a separate ID.
