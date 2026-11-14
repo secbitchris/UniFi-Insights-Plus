@@ -63,3 +63,13 @@ refresh-only policy with the same budget and working scheduler.
 
 Provider counters and pause state must remain intact through deployment.
 Do not clear quota state or force a check request for validation.
+
+## Blacklist restart guard (BL-1337)
+
+The blacklist endpoint has a separate five-download daily budget. A successful
+import now sets a persisted 24-hour freshness window; receiver restarts reuse
+the cache. The existing daily scheduler remains in place. Failed attempts reserve
+one hour of backoff before HTTP, and a 429 persists the later of the next UTC day,
+Retry-After, and X-RateLimit-Reset. A file lock serializes concurrent processes
+across the network-health volume. Corrupt or unwritable state fails closed.
+State lives in blacklist-download.json; individual-check quota state is separate.

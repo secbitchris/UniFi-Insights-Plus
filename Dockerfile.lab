@@ -12,7 +12,7 @@ FROM ubuntu:24.04
 
 ARG SOURCE_REVISION
 LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
-LABEL org.opencontainers.image.version="3.7.2-lab.5"
+LABEL org.opencontainers.image.version="3.7.2-lab.6"
 
 LABEL org.opencontainers.image.title="UniFi Log Insight"
 LABEL org.opencontainers.image.description="Real-time log analysis for UniFi routers — syslog, GeoIP, threat intelligence, and a live dashboard in a single container"
