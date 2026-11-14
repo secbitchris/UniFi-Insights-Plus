@@ -27,10 +27,12 @@ are retained as evidence rather than silently reclassified.
 ## Persistent state and private reader
 
 Bind /opt/unifi-logs/network-health on CT138 to /app/data/network-health in the
-container. Mode 0700; its ssh subdirectory contains the existing command-restricted
-summary-reader key and known-host pins migrated privately from CT113. Never commit
-or print those files. The reader sends no remote command, only the authorized
-fixed summary operation, and refuses unknown host keys. No new SSH grants.
+container. Mode 0700. The existing summary reader and private SSH key remain on
+CT113. UniFi Insights reads its already-exposed /json endpoint from a private
+reachability-source.json URL. No new listener, SSH grant, or key copy is needed.
+The existing CT113 listener retires its HTML view via a redirect and preserves
+only the summary route using deploy/retired_netwatch.py. Its service privileges
+and port remain unchanged; no new service is created.
 
 Import expected.json, watchlist.json, rfhist.json and dns-egress-state.json from
 CT113 before startup. Preserve aptxhist.json as historical evidence: it lacks
@@ -44,7 +46,7 @@ current controller and DNS rows; history surviving container recreation;
 watched clients; and current source timestamps for all available vantage readers.
 Unreachable sources stay explicitly unknown and cannot be called covered.
 Then disable CT113 netwatch-health.timer, netwatch-hist.timer, and
-netwatch-web.service. CT113 also runs Sonos: never stop the whole container.
+the old HTML view (replace the existing listener executable with the compatibility endpoint). CT113 also runs Sonos: never stop the whole container.
 Disable only the obsolete CT113-history backup timer after preserved history is
 verified; retain the independent reachability producers and their evidence.
 Point dashboard links to the new Network Health tab. Rollback restores the prior
