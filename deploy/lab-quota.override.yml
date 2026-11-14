@@ -1,6 +1,6 @@
 services:
   unifi-log-insight:
-    image: unifi-insights-lab:bl1331
+    image: unifi-insights-lab:bl1333
     pull_policy: never
     environment:
       ABUSEIPDB_BACKGROUND_DAILY_LIMIT: "200"

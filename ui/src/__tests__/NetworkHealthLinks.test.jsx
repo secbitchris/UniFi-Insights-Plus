@@ -24,7 +24,7 @@ describe('Ethernet evidence', () => {
     expect(screen.getByText('1000 Mbps')).toBeTruthy()
     expect(screen.getByText('100 Mbps')).toBeTruthy()
     expect(screen.getAllByText(/5 total.*reset/)).toHaveLength(2)
-    expect(screen.getByText(/native controller event history is not collected/)).toBeTruthy()
+    expect(screen.getByText(/native controller events are shown separately/)).toBeTruthy()
   })
 
   it('does not claim an active current fault when collection is stale', () => {
@@ -59,4 +59,12 @@ describe('Ethernet evidence', () => {
       URL.revokeObjectURL = oldRevoke
     }
   })
+})
+
+it('labels native events separately and exposes partial coverage', () => {
+  const nativeEvent = {id:'event1',at:1050,title_raw:'Ethernet link changed',message:'Test AP link changed'}
+  render(<NetworkHealthLinks now={1100} report={{generated:1060,native:{status:'partial',last_success:1060,truncated:true,events:[nativeEvent]},incidents:[{...incident,native_events:[nativeEvent],native_event_history:{status:'partial'}}]}} />)
+  expect(screen.getByText(/result limit reached; coverage is partial/)).toBeTruthy()
+  expect(screen.getByText(/Native controller · Ethernet link changed/)).toBeTruthy()
+  expect(screen.getByText(/correlations, not a diagnosis/)).toBeTruthy()
 })
